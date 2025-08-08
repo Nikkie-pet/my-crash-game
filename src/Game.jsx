@@ -10,10 +10,11 @@ export default function Game() {
   const GOOD_THR = 0.05;
   const RAMP_MAX_BOOST = 1.0;       // až +100 % během kola
 
+  // Streak multiplikátor
   const STREAK_STEP = 0.10;         // +10 % za GOOD/PERFECT
   const STREAK_CAP = 2.0;           // cap x2
 
-  // Quota 30 her / 12 h
+  // Kvóta 30 her / 12 h
   const QUOTA_TOTAL = 30;
   const QUOTA_WINDOW_HOURS = 12;
   const LS_QUOTA = "cg_quota";
@@ -26,7 +27,7 @@ export default function Game() {
   };
 
   // ====== STAV ======
-  const [phase, setPhase] = useState("idle");  // idle|ready|running|done
+  const [phase, setPhase] = useState("idle");  // idle | ready | running | done
   const [target, setTarget] = useState(1.78);
   const [value, setValue] = useState(1.00);
   const [result, setResult] = useState(null);
@@ -36,7 +37,7 @@ export default function Game() {
   const [tick, setTick] = useState(22);       // ms mezi kroky
   const [elapsed, setElapsed] = useState(0);
 
-  // vypočtené maximum pro tenhle run
+  // vypočtené maximum pro tenhle run (pro Range a výběr cíle)
   const [maxReach, setMaxReach] = useState(1.00);
 
   // meta
@@ -45,14 +46,14 @@ export default function Game() {
   const [bestError, setBestError] = useState(Infinity);
   const [history, setHistory] = useState([]);
 
-  // session leaderboard
+  // session leaderboardy
   const [topRuns, setTopRuns] = useState([]);
   const [topPrecision, setTopPrecision] = useState([]);
 
-  // daily challenge
+  // daily challenge (fixní target v rámci dne, ale stále v rozsahu 1..maxReach)
   const [dailyMode, setDailyMode] = useState(false);
 
-  // quota
+  // kvóta
   const [playsLeft, setPlaysLeft] = useState(QUOTA_TOTAL);
   const [resetAt, setResetAt] = useState(null);
 
@@ -64,7 +65,7 @@ export default function Game() {
   const rand = (min, max, decimals = 3) =>
     Number((Math.random() * (max - min) + min).toFixed(decimals));
 
-  // spočítej maximum pro celý run (diskrétní simulace stejnou logikou)
+  // výpočet dosažitelného maxima pro tenhle run (stejná logika, diskrétně)
   const computeMaxReach = (base = 1.0, s, tickMs, maxMs) => {
     let v = base;
     for (let t = 0; t < maxMs; t += tickMs) {
@@ -82,7 +83,7 @@ export default function Game() {
     return `${h}h ${m}m ${ss}s`;
   };
 
-  // drobný „tick“ pro odpočet resetu kvóty
+  // jemný tick pro odpočet resetu kvóty v UI
   const [, forceTick] = useState(0);
   useEffect(() => {
     const id = setInterval(() => forceTick((x) => x + 1), 1000);
@@ -121,7 +122,7 @@ export default function Game() {
 
   // ====== START RUNU ======
   const startRound = () => {
-    // quota check & případný reset
+    // quota check & případný reset okna
     const now = Date.now();
     if (resetAt && now >= resetAt) {
       const nextReset = now + QUOTA_WINDOW_HOURS * 60 * 60 * 1000;
@@ -134,23 +135,34 @@ export default function Game() {
       return;
     }
 
-    // adrenalin: náhodné tempo
+    // adrenalin: náhodné tempo pro tenhle run
     const s = rand(0.045, 0.10);            // přírůstek / tick
     const tk = Math.floor(rand(14, 28, 0)); // interval v ms
     setSpeed(s);
     setTick(tk);
 
-    // spočítej maxReach, target 1..maxReach
+    // spočítej maxReach → target bude 1.00 .. maxReach
     const maxV = computeMaxReach(1.0, s, tk, MAX_TIME);
     setMaxReach(maxV);
-    const tgt = Number((1 + Math.random() * (maxV - 1)).toFixed(2));
+
+    // dailyMode: deterministicky v rozsahu 1..maxV, jinak náhodně
+    const todayKey = new Date().toISOString().slice(0, 10);
+    const seededBetween = (min, max) => {
+      const seed = Array.from(todayKey).reduce((a, ch) => a + ch.charCodeAt(0), 0);
+      const rng = (seed % 10000) / 10000;
+      return Number((min + rng * (max - min)).toFixed(2));
+    };
+    const tgt = dailyMode
+      ? Math.max(1, Math.min(maxV, seededBetween(1.0, maxV)))
+      : Number((1 + Math.random() * (maxV - 1)).toFixed(2));
     setTarget(tgt);
 
-    // reset
+    // reset hodnot
     setValue(1.00);
     setElapsed(0);
     setResult(null);
 
+    // hráč uvidí parametry a ručně spustí
     setPhase("ready");
   };
 
@@ -226,26 +238,30 @@ export default function Game() {
       note = t("resultNoteMiss"); setStreak(0);
     }
 
+    // bonus za tempo
     const paceBonus = tick < 20 ? 1.2 : tick < 24 ? 1.1 : 1.0;
     runPoints = Math.round(runPoints * paceBonus);
 
+    // streak multiplier (budoucí hodnota streaku), limit x2
     const futureStreak = diff <= GOOD_THR ? streak + 1 : 0;
     const streakMult = Math.min(1 + futureStreak * STREAK_STEP, STREAK_CAP);
     runPoints = Math.round(runPoints * streakMult);
 
-    // body, best, historie
+    // body (persist)
     setPoints((p) => {
       const np = p + runPoints;
       localStorage.setItem(LS.points, String(np));
       return np;
     });
 
+    // best přesnost (persist)
     setBestError((prev) => {
       const next = Math.min(prev, diff);
       localStorage.setItem(LS.bestError, String(next));
       return next;
     });
 
+    // historie (persist posledních 10)
     const entry = {
       ts: Date.now(),
       target,
@@ -262,6 +278,7 @@ export default function Game() {
       return next;
     });
 
+    // session leaderboardy
     setTopRuns((arr) =>
       [...arr, entry].sort((a, b) => b.runPoints - a.runPoints).slice(0, 5)
     );
@@ -303,6 +320,14 @@ export default function Game() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [phase]);
 
+  // uklid při unmountu
+  useEffect(() => {
+    return () => {
+      clearInterval(growRef.current);
+      clearInterval(elapsedRef.current);
+    };
+  }, []);
+
   // ====== UI ======
   return (
     <div className="w-full max-w-3xl mx-auto p-6 grid gap-6">
@@ -340,7 +365,7 @@ export default function Game() {
         </div>
       </div>
 
-      {/* READY panel s parametry */}
+      {/* READY panel s parametry (vč. maxReach) */}
       {phase === "ready" ? (
         <div className="grid gap-4 p-4 rounded-xl bg-white text-black shadow">
           <div className="text-2xl font-bold text-center">{t('getReady')}</div>
@@ -371,7 +396,7 @@ export default function Game() {
             />
           </div>
 
-          {/* HODNOTA + OVLÁDÁNÍ */}
+          {/* HODNOTA */}
           <div className="text-center">
             {phase === "running" ? (
               <div className="text-7xl font-mono animate-pulse">{value.toFixed(2)}x</div>
@@ -380,6 +405,7 @@ export default function Game() {
             )}
           </div>
 
+          {/* OVLÁDÁNÍ */}
           <div className="flex justify-center gap-3">
             {(phase === "idle" || phase === "done") && (
               <button onClick={startRound} className="px-5 py-3 rounded-xl bg-black text-white hover:opacity-90 active:opacity-80 transition">
