@@ -1,0 +1,21 @@
+{
+  "points": "Points",
+  "streak": "Streak",
+  "bestErr": "Best error",
+  "playsLeft": "Plays left",
+  "resetIn": "reset in {{time}}",
+  "startRound": "Start Round",
+  "getReady": "Get Ready…",
+  "target": "Target",
+  "targetRange": "This round’s target range: 1.00 – {{max}}",
+  "baseSpeed": "Base speed",
+  "startNow": "Start now",
+  "stop": "Stop",
+  "resultNotePerfect": "PERFECT!",
+  "resultNoteGood": "Good",
+  "resultNoteMiss": "Miss",
+  "topRuns": "Top Runs (Points)",
+  "noRunsYet": "No runs yet.",
+  "topPrecision": "Top Precision (Lowest Error)",
+  "alertQuota": "You’ve used your 30 plays. The limit resets in 12 hours."
+}

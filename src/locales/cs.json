@@ -1,0 +1,21 @@
+{
+  "points": "Body",
+  "streak": "Série",
+  "bestErr": "Nejlepší chyba",
+  "playsLeft": "Zbývá her",
+  "resetIn": "reset za {{time}}",
+  "startRound": "Spustit kolo",
+  "getReady": "Připrav se…",
+  "target": "Cíl",
+  "targetRange": "Rozsah cíle v tomto kole: 1.00 – {{max}}",
+  "baseSpeed": "Základní rychlost",
+  "startNow": "Start",
+  "stop": "Stop",
+  "resultNotePerfect": "PERFEKTNÍ!",
+  "resultNoteGood": "Dobré",
+  "resultNoteMiss": "Mimo",
+  "topRuns": "Top hry (body)",
+  "noRunsYet": "Zatím žádné hry.",
+  "topPrecision": "Top přesnost (nejmenší chyba)",
+  "alertQuota": "Vyčerpal(a) jsi 30 her. Limit se obnoví za 12 hodin."
+}
