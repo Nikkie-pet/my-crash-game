@@ -61,6 +61,10 @@ export default function Game() {
   const growRef = useRef(null);
   const elapsedRef = useRef(null);
 
+  // zvuk
+  const [muted, setMuted] = useState(() => localStorage.getItem("muted") === "1");
+  const audioCtxRef = useRef(null);
+
   // ====== HELPERS ======
   const rand = (min, max, decimals = 3) =>
     Number((Math.random() * (max - min) + min).toFixed(decimals));
@@ -90,9 +94,40 @@ export default function Game() {
     return () => clearInterval(id);
   }, []);
 
-  // vibrace (haptika)
+  // haptika
   const vibrate = (pattern = 30) => {
     try { if (navigator.vibrate) navigator.vibrate(pattern); } catch {}
+  };
+
+  // zvuky (WebAudio) + napojení na mute z App.jsx
+  useEffect(() => {
+    const onMute = (e) => setMuted(!!e.detail?.muted);
+    window.addEventListener("cg-mute-change", onMute);
+    return () => window.removeEventListener("cg-mute-change", onMute);
+  }, []);
+
+  const ensureAudioCtx = () => {
+    if (!audioCtxRef.current) {
+      try { audioCtxRef.current = new (window.AudioContext || window.webkitAudioContext)(); } catch {}
+    }
+    return audioCtxRef.current;
+  };
+  const beep = (freq = 600, dur = 120, type = "sine", vol = 0.03) => {
+    if (muted) return;
+    const ctx = ensureAudioCtx();
+    if (!ctx) return;
+    const osc = ctx.createOscillator();
+    const gain = ctx.createGain();
+    osc.type = type;
+    osc.frequency.value = freq;
+    gain.gain.value = vol;
+    osc.connect(gain);
+    gain.connect(ctx.destination);
+    osc.start();
+    setTimeout(() => {
+      try { osc.stop(); } catch {}
+      try { osc.disconnect(); gain.disconnect(); } catch {}
+    }, dur);
   };
 
   // ====== INIT PERSISTENCE + QUOTA ======
@@ -175,6 +210,8 @@ export default function Game() {
     });
 
     vibrate(15);
+    beep(500, 80, "square");
+
     setPhase("running");
     const startedAt = performance.now();
 
@@ -202,6 +239,7 @@ export default function Game() {
   const stop = () => {
     if (phase !== "running") return;
     vibrate([20, 40, 20]);
+    beep(400, 90, "sine");
     clearInterval(growRef.current);
     clearInterval(elapsedRef.current);
     const diff = Math.abs(value - target);
@@ -231,11 +269,14 @@ export default function Game() {
     let note = "OK";
 
     if (diff <= PERFECT_THR) {
-      runPoints += 100; note = t("resultNotePerfect"); setStreak((s) => s + 1); vibrate([30, 60, 30]);
+      runPoints += 100; note = t("resultNotePerfect"); setStreak((s) => s + 1);
+      vibrate([30, 60, 30]); beep(900, 150, "triangle"); setTimeout(()=>beep(1200, 120, "triangle"), 120);
     } else if (diff <= GOOD_THR) {
-      runPoints += 40;  note = t("resultNoteGood");     setStreak((s) => s + 1); vibrate(40);
+      runPoints += 40;  note = t("resultNoteGood");     setStreak((s) => s + 1);
+      vibrate(40); beep(750, 120, "sine");
     } else {
       note = t("resultNoteMiss"); setStreak(0);
+      beep(220, 120, "sine");
     }
 
     // bonus za tempo
@@ -335,7 +376,7 @@ export default function Game() {
       <div className="flex flex-col md:flex-row items-start md:items-center justify-between gap-3">
         <div>
           <h2 className="text-xl font-bold">
-            {t('title', { x: <span className="font-mono">{target.toFixed(2)}x</span> })}
+            {t('title', { x: `${target.toFixed(2)}x` })}
           </h2>
           <div className="text-sm text-gray-500">
             {t('targetRange', { max: maxReach.toFixed(2) })}

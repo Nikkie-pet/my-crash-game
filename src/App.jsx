@@ -4,47 +4,48 @@ import Game from './Game';
 
 function App() {
   const { i18n } = useTranslation();
+  const [muted, setMuted] = React.useState(() => localStorage.getItem('muted') === '1');
 
-  // funkce pro změnu jazyka
-  const changeLanguage = (lng) => {
-    i18n.changeLanguage(lng);
-    localStorage.setItem('lang', lng); // uloží volbu pro příště
+  const changeLanguage = (lang) => {
+    i18n.changeLanguage(lang);
+    localStorage.setItem('lang', lang);
   };
 
-  // při prvním načtení aplikace zkontrolujeme uložený jazyk
-  React.useEffect(() => {
-    const savedLang = localStorage.getItem('lang');
-    if (savedLang) {
-      i18n.changeLanguage(savedLang);
-    }
-  }, [i18n]);
+  const toggleMute = () => {
+    const next = !muted;
+    setMuted(next);
+    localStorage.setItem('muted', next ? '1' : '0');
+    // pošleme custom event, aby Game.jsx věděl o změně
+    window.dispatchEvent(new CustomEvent('cg-mute-change', { detail: { muted: next } }));
+  };
 
   return (
-    <div className="min-h-screen bg-gray-900 text-white">
-      {/* Horní lišta s přepínačem jazyka */}
-      <div className="flex justify-end p-4 gap-2 border-b border-gray-700">
+    <div className="min-h-screen flex flex-col items-center justify-center bg-gray-900 text-white">
+      {/* Horní lišta */}
+      <div className="absolute top-4 right-4 flex gap-2">
         <button
           onClick={() => changeLanguage('cs')}
-          className={`px-3 py-1 rounded ${
-            i18n.language === 'cs' ? 'bg-blue-600' : 'bg-gray-700 hover:bg-gray-600'
-          }`}
+          className="px-3 py-1 bg-blue-600 rounded"
         >
           CZ
         </button>
         <button
           onClick={() => changeLanguage('en')}
-          className={`px-3 py-1 rounded ${
-            i18n.language === 'en' ? 'bg-blue-600' : 'bg-gray-700 hover:bg-gray-600'
-          }`}
+          className="px-3 py-1 bg-green-600 rounded"
         >
           EN
+        </button>
+        <button
+          onClick={toggleMute}
+          className={`px-3 py-1 rounded ${muted ? 'bg-gray-700' : 'bg-yellow-600'}`}
+          title="Toggle sound"
+        >
+          {muted ? '🔇' : '🔊'}
         </button>
       </div>
 
       {/* Herní komponenta */}
-      <div className="p-4">
-        <Game />
-      </div>
+      <Game />
     </div>
   );
 }
