@@ -50,7 +50,7 @@ export default function Game() {
   const [topRuns, setTopRuns] = useState([]);
   const [topPrecision, setTopPrecision] = useState([]);
 
-  // daily challenge (fixní target v rámci dne, ale stále v rozsahu 1..maxReach)
+  // daily challenge
   const [dailyMode, setDailyMode] = useState(false);
 
   // kvóta
@@ -61,7 +61,7 @@ export default function Game() {
   const growRef = useRef(null);
   const elapsedRef = useRef(null);
 
-  // zvuk
+  // zvuk / mute
   const [muted, setMuted] = useState(() => localStorage.getItem("muted") === "1");
   const audioCtxRef = useRef(null);
 
@@ -69,7 +69,6 @@ export default function Game() {
   const rand = (min, max, decimals = 3) =>
     Number((Math.random() * (max - min) + min).toFixed(decimals));
 
-  // výpočet dosažitelného maxima pro tenhle run (stejná logika, diskrétně)
   const computeMaxReach = (base = 1.0, s, tickMs, maxMs) => {
     let v = base;
     for (let t = 0; t < maxMs; t += tickMs) {
@@ -157,7 +156,7 @@ export default function Game() {
 
   // ====== START RUNU ======
   const startRound = () => {
-    // quota check & případný reset okna
+    // quota a případný reset okna
     const now = Date.now();
     if (resetAt && now >= resetAt) {
       const nextReset = now + QUOTA_WINDOW_HOURS * 60 * 60 * 1000;
@@ -170,17 +169,16 @@ export default function Game() {
       return;
     }
 
-    // adrenalin: náhodné tempo pro tenhle run
+    // náhodné tempo pro tenhle run
     const s = rand(0.045, 0.10);            // přírůstek / tick
     const tk = Math.floor(rand(14, 28, 0)); // interval v ms
     setSpeed(s);
     setTick(tk);
 
-    // spočítej maxReach → target bude 1.00 .. maxReach
+    // maxReach a target 1..maxReach
     const maxV = computeMaxReach(1.0, s, tk, MAX_TIME);
     setMaxReach(maxV);
 
-    // dailyMode: deterministicky v rozsahu 1..maxV, jinak náhodně
     const todayKey = new Date().toISOString().slice(0, 10);
     const seededBetween = (min, max) => {
       const seed = Array.from(todayKey).reduce((a, ch) => a + ch.charCodeAt(0), 0);
@@ -197,7 +195,6 @@ export default function Game() {
     setElapsed(0);
     setResult(null);
 
-    // hráč uvidí parametry a ručně spustí
     setPhase("ready");
   };
 
@@ -406,7 +403,7 @@ export default function Game() {
         </div>
       </div>
 
-      {/* READY panel s parametry (vč. maxReach) */}
+      {/* READY panel */}
       {phase === "ready" ? (
         <div className="grid gap-4 p-4 rounded-xl bg-white text-black shadow">
           <div className="text-2xl font-bold text-center">{t('getReady')}</div>
