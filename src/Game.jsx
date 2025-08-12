@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import React, { useState, useEffect, useRef } from "react";
 import { useTranslation } from "react-i18next";
 
 export default function Game() {
@@ -37,7 +37,7 @@ export default function Game() {
   const [tick, setTick] = useState(22);       // ms mezi kroky
   const [elapsed, setElapsed] = useState(0);
 
-  // vypočtené maximum pro tenhle run (pro Range a výběr cíle)
+  // vypočtené maximum pro tenhle run (pro UI)
   const [maxReach, setMaxReach] = useState(1.00);
 
   // meta
@@ -50,7 +50,7 @@ export default function Game() {
   const [topRuns, setTopRuns] = useState([]);
   const [topPrecision, setTopPrecision] = useState([]);
 
-  // daily challenge
+  // daily challenge (deterministický target v rámci dne)
   const [dailyMode, setDailyMode] = useState(false);
 
   // kvóta
@@ -98,7 +98,7 @@ export default function Game() {
     try { if (navigator.vibrate) navigator.vibrate(pattern); } catch {}
   };
 
-  // zvuky (WebAudio) + napojení na mute z App.jsx
+  // zvuky (WebAudio) + napojení na mute (pokud přidáš tlačítko v App.jsx)
   useEffect(() => {
     const onMute = (e) => setMuted(!!e.detail?.muted);
     window.addEventListener("cg-mute-change", onMute);
@@ -156,7 +156,6 @@ export default function Game() {
 
   // ====== START RUNU ======
   const startRound = () => {
-    // quota a případný reset okna
     const now = Date.now();
     if (resetAt && now >= resetAt) {
       const nextReset = now + QUOTA_WINDOW_HOURS * 60 * 60 * 1000;
@@ -169,13 +168,11 @@ export default function Game() {
       return;
     }
 
-    // náhodné tempo pro tenhle run
-    const s = rand(0.045, 0.10);            // přírůstek / tick
-    const tk = Math.floor(rand(14, 28, 0)); // interval v ms
+    const s = rand(0.045, 0.10);
+    const tk = Math.floor(rand(14, 28, 0));
     setSpeed(s);
     setTick(tk);
 
-    // maxReach a target 1..maxReach
     const maxV = computeMaxReach(1.0, s, tk, MAX_TIME);
     setMaxReach(maxV);
 
@@ -190,7 +187,6 @@ export default function Game() {
       : Number((1 + Math.random() * (maxV - 1)).toFixed(2));
     setTarget(tgt);
 
-    // reset hodnot
     setValue(1.00);
     setElapsed(0);
     setResult(null);
@@ -199,7 +195,6 @@ export default function Game() {
   };
 
   const beginRunning = () => {
-    // odečti 1 hru z kvóty
     setPlaysLeft((n) => {
       const next = Math.max(0, n - 1);
       localStorage.setItem(LS_QUOTA, JSON.stringify({ playsLeft: next, resetAt }));
@@ -212,14 +207,12 @@ export default function Game() {
     setPhase("running");
     const startedAt = performance.now();
 
-    // růst hodnoty s ramp-upem
     growRef.current = setInterval(() => {
       const e = performance.now() - startedAt;
       const rampBoost = 1 + Math.min(e / 4000, RAMP_MAX_BOOST);
       setValue((v) => +(v + speed * rampBoost).toFixed(2));
     }, tick);
 
-    // čas + timeout
     elapsedRef.current = setInterval(() => {
       const e = performance.now() - startedAt;
       setElapsed(e);
@@ -232,7 +225,6 @@ export default function Game() {
     }, 50);
   };
 
-  // ====== STOP/DONE ======
   const stop = () => {
     if (phase !== "running") return;
     vibrate([20, 40, 20]);
@@ -243,7 +235,6 @@ export default function Game() {
     finishRound(diff);
   };
 
-  // sdílení výsledku
   const shareResult = async (res) => {
     const text = `I hit ${value.toFixed(2)}x vs target ${target.toFixed(2)}x (err ${res.diff.toFixed(2)}) — score +${res.runPoints}. Try it: ${location.href}`;
     try {
@@ -276,30 +267,25 @@ export default function Game() {
       beep(220, 120, "sine");
     }
 
-    // bonus za tempo
     const paceBonus = tick < 20 ? 1.2 : tick < 24 ? 1.1 : 1.0;
     runPoints = Math.round(runPoints * paceBonus);
 
-    // streak multiplier (budoucí hodnota streaku), limit x2
     const futureStreak = diff <= GOOD_THR ? streak + 1 : 0;
     const streakMult = Math.min(1 + futureStreak * STREAK_STEP, STREAK_CAP);
     runPoints = Math.round(runPoints * streakMult);
 
-    // body (persist)
     setPoints((p) => {
       const np = p + runPoints;
       localStorage.setItem(LS.points, String(np));
       return np;
     });
 
-    // best přesnost (persist)
     setBestError((prev) => {
       const next = Math.min(prev, diff);
       localStorage.setItem(LS.bestError, String(next));
       return next;
     });
 
-    // historie (persist posledních 10)
     const entry = {
       ts: Date.now(),
       target,
@@ -316,7 +302,6 @@ export default function Game() {
       return next;
     });
 
-    // session leaderboardy
     setTopRuns((arr) =>
       [...arr, entry].sort((a, b) => b.runPoints - a.runPoints).slice(0, 5)
     );
@@ -338,7 +323,7 @@ export default function Game() {
     setPhase("done");
   };
 
-  // klávesové zkratky: Enter = start/confirm, Space = stop
+  // hotkeys
   useEffect(() => {
     const onKey = (e) => {
       if (e.repeat) return;
@@ -358,7 +343,7 @@ export default function Game() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [phase]);
 
-  // uklid při unmountu
+  // cleanup
   useEffect(() => {
     return () => {
       clearInterval(growRef.current);
@@ -366,7 +351,6 @@ export default function Game() {
     };
   }, []);
 
-  // ====== UI ======
   return (
     <div className="w-full max-w-3xl mx-auto p-6 grid gap-6">
       {/* TOP BAR */}
@@ -375,7 +359,7 @@ export default function Game() {
           <h2 className="text-xl font-bold">
             {t('title', { x: `${target.toFixed(2)}x` })}
           </h2>
-          <div className="text-sm text-gray-500">
+          <div className="text-sm text-gray-300">
             {t('targetRange', { max: maxReach.toFixed(2) })}
           </div>
         </div>
@@ -385,12 +369,12 @@ export default function Game() {
             <div>{t('points')}: <span className="font-semibold">{points}</span></div>
             <div>
               {t('streak')}: <span className="font-semibold">{streak}</span>{" "}
-              <span className="text-xs text-gray-500">(x{Math.min(1 + streak * STREAK_STEP, STREAK_CAP).toFixed(2)})</span>
+              <span className="text-xs text-gray-300">(x{Math.min(1 + streak * STREAK_STEP, STREAK_CAP).toFixed(2)})</span>
             </div>
-            <div className="text-xs text-gray-500">
+            <div className="text-xs text-gray-300">
               {t('bestErr')}: {bestError === Infinity ? "-" : bestError.toFixed(2)}
             </div>
-            <div className="text-xs text-gray-500">
+            <div className="text-xs text-gray-300">
               {t('playsLeft')}: <span className="font-semibold">{playsLeft}</span>
               {resetAt && <> • {t('resetIn', { time: fmtTime(resetAt - Date.now()) })}</>}
             </div>
@@ -413,7 +397,7 @@ export default function Game() {
             <div>{t('baseSpeed')}<br/><span className="font-mono">{speed.toFixed(3)}</span>/tick</div>
             <div>Tick<br/><span className="font-mono">{tick}ms</span></div>
             <div>Ramp-up<br/><span className="font-mono">+{Math.round(RAMP_MAX_BOOST*100)}%</span></div>
-            <div>Time limit<br/><span className="font-mono">{(MAX_TIME/1000).toFixed(0)}s</span></div>
+            <div>{t('timeLimit')}<br/><span className="font-mono">{(MAX_TIME/1000).toFixed(0)}s</span></div>
           </div>
           <div className="flex justify-center gap-2">
             <button onClick={beginRunning} className="px-5 py-3 rounded-xl bg-black text-white hover:opacity-90 active:opacity-80 transition">
@@ -427,9 +411,9 @@ export default function Game() {
       ) : (
         <>
           {/* PROGRESS */}
-          <div className="h-2 w-full bg-gray-200 rounded overflow-hidden">
+          <div className="h-2 w-full bg-gray-700 rounded overflow-hidden">
             <div
-              className="h-2 bg-lime-500 transition-[width] duration-75"
+              className="h-2 bg-lime-400 transition-[width] duration-75"
               style={{ width: `${Math.min((elapsed / MAX_TIME) * 100, 100)}%` }}
             />
           </div>
@@ -451,7 +435,7 @@ export default function Game() {
               </button>
             )}
             {phase === "running" && (
-              <button onClick={stop} className="px-5 py-3 rounded-xl bg-lime-500 text-black font-semibold hover:scale-105 active:scale-95 transition">
+              <button onClick={stop} className="px-5 py-3 rounded-xl bg-lime-400 text-black font-semibold hover:scale-105 active:scale-95 transition">
                 {t('stop')}
               </button>
             )}
@@ -477,7 +461,7 @@ export default function Game() {
               {t('startRound')}
             </button>
           </div>
-          <div className="text-xs text-gray-500">
+          <div className="text-xs text-gray-300">
             time {Math.round(result.elapsed)}ms • base {speed.toFixed(3)} / {tick}ms • max {maxReach.toFixed(2)}x
           </div>
         </div>
@@ -485,10 +469,10 @@ export default function Game() {
 
       {/* SESSION LEADERBOARD */}
       <div className="grid md:grid-cols-2 gap-4">
-        <div className="p-4 bg-white rounded-xl shadow">
+        <div className="p-4 bg-white text-black rounded-xl shadow">
           <div className="font-semibold mb-2">{t('topRuns')}</div>
           {topRuns.length === 0 ? (
-            <div className="text-sm text-gray-500">{t('noRunsYet')}</div>
+            <div className="text-sm text-gray-600">{t('noRunsYet')}</div>
           ) : (
             <ol className="text-sm grid gap-1">
               {topRuns.map((r, i) => (
@@ -500,10 +484,10 @@ export default function Game() {
             </ol>
           )}
         </div>
-        <div className="p-4 bg-white rounded-xl shadow">
+        <div className="p-4 bg-white text-black rounded-xl shadow">
           <div className="font-semibold mb-2">{t('topPrecision')}</div>
           {topPrecision.length === 0 ? (
-            <div className="text-sm text-gray-500">{t('noRunsYet')}</div>
+            <div className="text-sm text-gray-600">{t('noRunsYet')}</div>
           ) : (
             <ol className="text-sm grid gap-1">
               {topPrecision.map((r, i) => (
@@ -519,9 +503,9 @@ export default function Game() {
 
       {/* RECENT RUNS */}
       {history.length > 0 && (
-        <div className="p-4 bg-white rounded-xl shadow">
+        <div className="p-4 bg-white text-black rounded-xl shadow">
           <div className="font-semibold mb-2">{t('recentRuns')}</div>
-          <ul className="text-xs text-gray-600 grid gap-1 max-h-32 overflow-auto pr-1">
+          <ul className="text-xs text-gray-700 grid gap-1 max-h-32 overflow-auto pr-1">
             {history.map((r, i) => (
               <li key={r.ts + "_" + i} className="flex justify-between">
                 <span>{new Date(r.ts).toLocaleTimeString()} • tgt {r.target.toFixed?.(2) ?? r.target} • val {r.value.toFixed?.(2) ?? r.value}</span>
