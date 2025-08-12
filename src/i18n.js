@@ -10,10 +10,7 @@ const initial =
 i18n
   .use(initReactI18next)
   .init({
-    resources: {
-      cs: { translation: cs },
-      en: { translation: en }
-    },
+    resources: { cs: { translation: cs }, en: { translation: en } },
     lng: initial,
     fallbackLng: "en",
     interpolation: { escapeValue: false }
