@@ -1,17 +1,41 @@
 <!doctype html>
-<html lang="en">
+<html lang="cs">
   <head>
     <meta charset="UTF-8" />
-    <link rel="icon" type="image/svg+xml" href="/vite.svg" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Vite + React</title>
-  </head><meta property="og:title" content="My Crash Game - Test Your Reflexes!" />
-<meta property="og:description" content="Can you stop the multiplier at the right moment? Play now for free!" />
-<meta property="og:image" content="https://my-crash-game-icr30v4fd-nikkies-projects-72c256a6.vercel.app/og-image.png" />
-<meta property="og:url" content="https://my-crash-game-icr30v4fd-nikkies-projects-72c256a6.vercel.app" />
-<meta property="og:type" content="website" />
+    <meta
+      name="viewport"
+      content="width=device-width, initial-scale=1, viewport-fit=cover"
+    />
+    <title>Crash Aim – Test Your Reflexes!</title>
+    <meta name="description" content="Stop as close to the target multiplier as you can. Daily mode, streaks, leaderboards." />
+
+    <!-- Open Graph (pro sdílení na sítích) -->
+    <meta property="og:title" content="Crash Aim – Test Your Reflexes!" />
+    <meta property="og:description" content="Stop as close to the target multiplier as you can. Daily mode, streaks, leaderboards." />
+    <meta property="og:type" content="website" />
+    <!-- 🔽 nahraď svojí produkční adresou (klidně tu dlouhou vercel.app) -->
+    <meta property="og:url" content="https://my-crash-game-icr30v4fd-nikkies-projects-72c256a6.vercel.app" />
+    <meta property="og:image" content="https://my-crash-game-icr30v4fd-nikkies-projects-72c256a6.vercel.app/og-image.png" />
+    <meta property="og:image:width" content="1200" />
+    <meta property="og:image:height" content="630" />
+
+    <!-- Twitter cards -->
+    <meta name="twitter:card" content="summary_large_image" />
+    <meta name="twitter:title" content="Crash Aim – Test Your Reflexes!" />
+    <meta name="twitter:description" content="Stop as close to the target multiplier as you can. Daily mode, streaks, leaderboards." />
+    <meta name="twitter:image" content="https://my-crash-game-icr30v4fd-nikkies-projects-72c256a6.vercel.app/og-image.png" />
+
+    <!-- (Volitelné) Plausible Analytics – až budeš chtít statistiky -->
+    <!--
+    <script defer data-domain="my-crash-game-icr30v4fd-nikkies-projects-72c256a6.vercel.app"
+            src="https://plausible.io/js/script.js"></script>
+    -->
+
+    <!-- Vite vloží buildované CSS/JS automaticky -->
+  </head>
   <body>
     <div id="root"></div>
+    <!-- Vstupní bod aplikace -->
     <script type="module" src="/src/main.jsx"></script>
   </body>
 </html>
