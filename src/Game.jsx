@@ -1,6 +1,28 @@
 import React, { useState, useEffect, useRef } from "react";
 import { useTranslation } from "react-i18next";
 
+/* ---------- Tooltip (čistý React, bez libek) ---------- */
+function Tooltip({ content, children }) {
+  const [open, setOpen] = useState(false);
+  return (
+    <div
+      className="relative inline-block"
+      onMouseEnter={() => setOpen(true)}
+      onMouseLeave={() => setOpen(false)}
+      onFocus={() => setOpen(true)}
+      onBlur={() => setOpen(false)}
+    >
+      {children}
+      {open && (
+        <div className="absolute z-50 -top-2 left-1/2 -translate-x-1/2 -translate-y-full px-3 py-2 text-xs rounded-lg bg-slate-900 text-white shadow-soft whitespace-nowrap dark:bg-slate-200 dark:text-slate-900">
+          {content}
+          <div className="absolute top-full left-1/2 -translate-x-1/2 w-0 h-0 border-x-8 border-x-transparent border-t-8 border-t-slate-900 dark:border-t-slate-200" />
+        </div>
+      )}
+    </div>
+  );
+}
+
 export default function Game() {
   const { t } = useTranslation();
 
@@ -19,12 +41,13 @@ export default function Game() {
   // STAVY
   const [phase, setPhase] = useState("idle");
   const [target, setTarget] = useState(1.78);
-  const [value, setValue] = useState(1.00);
+  const [value, setValue] = useState(1.0);           // „skutečná“ hodnota
+  const [displayValue, setDisplayValue] = useState(1.0); // zobrazená (inertní)
   const [result, setResult] = useState(null);
   const [speed, setSpeed] = useState(0.05);
   const [tick, setTick] = useState(22);
   const [elapsed, setElapsed] = useState(0);
-  const [maxReach, setMaxReach] = useState(1.00);
+  const [maxReach, setMaxReach] = useState(1.0);
   const [points, setPoints] = useState(0);
   const [streak, setStreak] = useState(0);
   const [bestError, setBestError] = useState(Infinity);
@@ -36,8 +59,10 @@ export default function Game() {
   const [resetAt, setResetAt] = useState(null);
   const [muted, setMuted] = useState(() => localStorage.getItem("muted") === "1");
 
+  // refy
   const growRef = useRef(null);
   const elapsedRef = useRef(null);
+  const rafRef = useRef(null);
   const audioCtxRef = useRef(null);
 
   // HELPERS
@@ -91,12 +116,27 @@ export default function Game() {
     }
   }, []);
 
-  // Mute sync z App
+  // sync mute z App
   useEffect(() => {
     const onMute = (e) => setMuted(!!e.detail?.muted);
     window.addEventListener("cg-mute-change", onMute);
     return () => window.removeEventListener("cg-mute-change", onMute);
   }, []);
+
+  // INERTIE: displayValue plynule dohání value
+  useEffect(() => {
+    const INERTIA = 0.18; // 18 %/frame
+    const tick = () => {
+      setDisplayValue((d) => {
+        const diff = value - d;
+        if (Math.abs(diff) < 0.001) return value;
+        return d + diff * INERTIA;
+      });
+      rafRef.current = requestAnimationFrame(tick);
+    };
+    rafRef.current = requestAnimationFrame(tick);
+    return () => cancelAnimationFrame(rafRef.current);
+  }, [value]);
 
   // START kola
   const startRound = () => {
@@ -126,7 +166,8 @@ export default function Game() {
       : Number((1 + Math.random() * (maxV - 1)).toFixed(2));
     setTarget(tgt);
 
-    setValue(1.00); setElapsed(0); setResult(null); setPhase("ready");
+    setValue(1.0); setDisplayValue(1.0);
+    setElapsed(0); setResult(null); setPhase("ready");
   };
 
   // READY → RUN
@@ -194,7 +235,7 @@ export default function Game() {
     setPhase("done");
   };
 
-  // hotkeys & cleanup
+  // klávesy & cleanup
   useEffect(() => {
     const onKey = (e) => {
       if (e.repeat) return;
@@ -213,17 +254,16 @@ export default function Game() {
 
   useEffect(() => () => { clearInterval(growRef.current); clearInterval(elapsedRef.current); }, []);
 
-  // UI
   return (
     <div className="grid gap-6">
       {/* info karta */}
-      <section className="rounded-2xl bg-white shadow-soft border border-neutral-200 p-6">
+      <section className="rounded-2xl bg-white shadow-soft border border-neutral-200 p-6 dark:bg-slate-900 dark:border-slate-800">
         <div className="flex flex-col md:flex-row items-start md:items-center justify-between gap-4">
           <div>
             <h2 className="text-lg font-semibold tracking-tight">
               {t("title", { x: `${target.toFixed(2)}x` })}
             </h2>
-            <p className="text-sm text-slate-500">{t("targetRange", { max: maxReach.toFixed(2) })}</p>
+            <p className="text-sm text-slate-500 dark:text-slate-400">{t("targetRange", { max: maxReach.toFixed(2) })}</p>
           </div>
 
           <div className="flex items-center gap-6 text-sm">
@@ -232,10 +272,10 @@ export default function Game() {
               <div>{t("streak")}: <span className="font-semibold">{streak}</span>
                 <span className="text-slate-400"> (x{Math.min(1 + streak * STREAK_STEP, STREAK_CAP).toFixed(2)})</span>
               </div>
-              <div className="text-slate-500">
+              <div className="text-slate-500 dark:text-slate-400">
                 {t("bestErr")}: {bestError === Infinity ? "-" : bestError.toFixed(2)}
               </div>
-              <div className="text-slate-500">
+              <div className="text-slate-500 dark:text-slate-400">
                 {t("playsLeft")}: <span className="font-semibold">{playsLeft}</span>
                 {resetAt && <> • {t("resetIn", { time: fmtTime(resetAt - Date.now()) })}</>}
               </div>
@@ -243,23 +283,23 @@ export default function Game() {
 
             <label className="flex items-center gap-2">
               <input type="checkbox" className="accent-emerald-600" checked={dailyMode} onChange={(e)=>setDailyMode(e.target.checked)} />
-              <span className="text-sm">{t("daily")}</span>
+              <span className="text-sm"> {t("daily")} </span>
             </label>
           </div>
         </div>
       </section>
 
-      {/* ready/fáze */}
+      {/* READY fáze se specifiky + TOOLTIPY */}
       {phase === "ready" ? (
-        <section className="rounded-2xl bg-white shadow-soft border border-neutral-200 p-6">
+        <section className="rounded-2xl bg-white shadow-soft border border-neutral-200 p-6 dark:bg-slate-900 dark:border-slate-800">
           <div className="text-center mb-4 text-xl font-semibold">{t("getReady")}</div>
           <div className="grid grid-cols-2 md:grid-cols-6 gap-3 text-sm">
-            <Info label={t("target")} value={`${target.toFixed(2)}x`} />
-            <Info label={t("range")} value={`1.00–${maxReach.toFixed(2)}x`} />
-            <Info label={t("baseSpeed")} value={`${speed.toFixed(3)}/tick`} />
-            <Info label="Tick" value={`${tick}ms`} />
-            <Info label="Ramp-up" value={`+${Math.round(RAMP_MAX_BOOST*100)}%`} />
-            <Info label={t("timeLimit")} value={`${(MAX_TIME/1000).toFixed(0)}s`} />
+            <Info label={t("target")} value={`${target.toFixed(2)}x`} hint="Požadovaná hodnota násobiče pro ideální zásah." />
+            <Info label={t("range")} value={`1.00–${maxReach.toFixed(2)}x`} hint="Teoretický rozsah, kterého lze v tomto kole dosáhnout." />
+            <Info label={t("baseSpeed")} value={`${speed.toFixed(3)}/tick`} hint="Základní tempo růstu. V čase se ještě zrychluje ramp-upem." />
+            <Info label="Tick" value={`${tick}ms`} hint="Jak často se hodnota přepočítává. Menší číslo = rychlejší." />
+            <Info label="Ramp-up" value={`+${Math.round(RAMP_MAX_BOOST*100)}%`} hint="Postupné zrychlování v průběhu kola." />
+            <Info label={t("timeLimit")} value={`${(MAX_TIME/1000).toFixed(0)}s`} hint="Po uplynutí limitu se kolo ukončí s penalizací." />
           </div>
           <div className="flex justify-center gap-3 mt-6">
             <Primary onClick={beginRunning}>{t("startNow")}</Primary>
@@ -269,17 +309,17 @@ export default function Game() {
       ) : (
         <>
           {/* progress */}
-          <div className="h-2 w-full bg-neutral-200 rounded-full overflow-hidden">
+          <div className="h-2 w-full bg-neutral-200 rounded-full overflow-hidden dark:bg-slate-800">
             <div
               className="h-2 bg-emerald-500 transition-[width] duration-75"
               style={{ width: `${Math.min((elapsed / MAX_TIME) * 100, 100)}%` }}
             />
           </div>
 
-          {/* cifra */}
-          <section className="rounded-2xl bg-white shadow-soft border border-neutral-200 p-10 text-center">
+          {/* cifra s INERTIÍ (displayValue) */}
+          <section className="rounded-2xl bg-white shadow-soft border border-neutral-200 p-10 text-center dark:bg-slate-900 dark:border-slate-800">
             <div className={`text-7xl font-extrabold tracking-tight ${phase === "running" ? "animate-pulse" : ""}`}>
-              {value.toFixed(2)}<span className="text-emerald-500">x</span>
+              {displayValue.toFixed(2)}<span className="text-emerald-500">x</span>
             </div>
           </section>
 
@@ -293,8 +333,8 @@ export default function Game() {
 
       {/* výsledek */}
       {result && (
-        <section className="rounded-2xl bg-white shadow-soft border border-neutral-200 p-6 text-center">
-          <div className="text-sm text-slate-600">
+        <section className="rounded-2xl bg-white shadow-soft border border-neutral-200 p-6 text-center dark:bg-slate-900 dark:border-slate-800">
+          <div className="text-sm text-slate-600 dark:text-slate-300">
             value <span className="font-mono">{result.value.toFixed(2)}x</span> • error <span className="font-mono">{result.diff.toFixed(2)}</span>
           </div>
           <div className="mt-1 font-semibold">
@@ -322,9 +362,9 @@ export default function Game() {
 
       {/* historie */}
       {history.length > 0 && (
-        <section className="rounded-2xl bg-white shadow-soft border border-neutral-200 p-6">
+        <section className="rounded-2xl bg-white shadow-soft border border-neutral-200 p-6 dark:bg-slate-900 dark:border-slate-800">
           <div className="font-semibold mb-3">{t("recentRuns")}</div>
-          <ul className="text-xs text-slate-600 grid gap-1 max-h-40 overflow-auto pr-1">
+          <ul className="text-xs text-slate-600 dark:text-slate-300 grid gap-1 max-h-40 overflow-auto pr-1">
             {history.map((r, i) => (
               <li key={r.ts + "_" + i} className="flex justify-between">
                 <span>{new Date(r.ts).toLocaleTimeString()} • tgt {r.target.toFixed?.(2) ?? r.target} • val {r.value.toFixed?.(2) ?? r.value}</span>
@@ -338,21 +378,24 @@ export default function Game() {
   );
 }
 
-function Info({ label, value }) {
+/* ---------- malé UI pomocníci ---------- */
+function Info({ label, value, hint }) {
   return (
-    <div className="rounded-xl border border-neutral-200 bg-neutral-50 px-3 py-2 text-center">
-      <div className="text-[11px] uppercase tracking-wide text-slate-500">{label}</div>
-      <div className="font-mono text-sm">{value}</div>
-    </div>
+    <Tooltip content={hint}>
+      <div className="cursor-help rounded-xl border border-neutral-200 bg-neutral-50 px-3 py-2 text-center dark:bg-slate-800 dark:border-slate-700">
+        <div className="text-[11px] uppercase tracking-wide text-slate-500 dark:text-slate-400">{label}</div>
+        <div className="font-mono text-sm">{value}</div>
+      </div>
+    </Tooltip>
   );
 }
 
 function Card({ title, empty, children }) {
   const isEmpty = !children || (Array.isArray(children) && children.length === 0);
   return (
-    <section className="rounded-2xl bg-white shadow-soft border border-neutral-200 p-6">
+    <section className="rounded-2xl bg-white shadow-soft border border-neutral-200 p-6 dark:bg-slate-900 dark:border-slate-800">
       <div className="font-semibold mb-3">{title}</div>
-      {isEmpty ? <div className="text-sm text-slate-500">{empty}</div> : <ol className="text-sm grid gap-1">{children}</ol>}
+      {isEmpty ? <div className="text-sm text-slate-500 dark:text-slate-400">{empty}</div> : <ol className="text-sm grid gap-1">{children}</ol>}
     </section>
   );
 }
@@ -360,8 +403,8 @@ function Card({ title, empty, children }) {
 function Row({ left, right }) {
   return (
     <li className="flex items-center justify-between">
-      <span className="text-slate-700">{left}</span>
-      <span className="font-mono text-slate-900">{right}</span>
+      <span className="text-slate-700 dark:text-slate-200">{left}</span>
+      <span className="font-mono text-slate-900 dark:text-white">{right}</span>
     </li>
   );
 }
@@ -370,7 +413,7 @@ function Primary({ children, ...props }) {
   return (
     <button
       {...props}
-      className="px-5 py-3 rounded-xl bg-slate-900 text-white hover:bg-slate-800 active:scale-[.99] transition shadow-soft"
+      className="px-5 py-3 rounded-xl bg-slate-900 text-white hover:bg-slate-800 active:scale-[.99] transition shadow-soft dark:bg-white dark:text-slate-900 dark:hover:bg-neutral-100"
     >
       {children}
     </button>
@@ -392,7 +435,7 @@ function Ghost({ children, ...props }) {
   return (
     <button
       {...props}
-      className="px-5 py-3 rounded-xl bg-white border border-neutral-200 text-slate-900 hover:bg-neutral-100 active:scale-[.99] transition"
+      className="px-5 py-3 rounded-xl bg-white border border-neutral-200 text-slate-900 hover:bg-neutral-100 active:scale-[.99] transition dark:bg-slate-900 dark:text-slate-100 dark:border-slate-700 dark:hover:bg-slate-800"
     >
       {children}
     </button>
