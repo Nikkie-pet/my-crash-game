@@ -25,27 +25,48 @@ export default function App() {
   };
 
   return (
-    <div className="min-h-screen bg-fuchsia-900 text-white">
-      <div className="fixed top-2 left-2 z-50 text-xs bg-black/70 px-2 py-1 rounded">
-        build: {sha || "dev"}
-      </div>
+    <div className="min-h-screen">
+      {/* horní lišta */}
+      <header className="sticky top-0 z-40 bg-neutral-50/80 backdrop-blur border-b border-neutral-200">
+        <div className="max-w-5xl mx-auto px-4 h-14 flex items-center justify-between">
+          <div className="flex items-center gap-3">
+            <div className="w-7 h-7 rounded-lg bg-emerald-500" aria-hidden />
+            <span className="font-extrabold tracking-tight">Crash&nbsp;Aim</span>
+          </div>
 
-      <div className="flex justify-end items-center gap-2 p-4">
-        <button
-          onClick={toggleMute}
-          className={`px-3 py-1 rounded font-semibold ${muted ? "bg-gray-700" : "bg-yellow-400 text-black"}`}
-          title={muted ? "Zapnout zvuk" : "Vypnout zvuk"}
-        >
-          {muted ? "🔇" : "🔊"}
-        </button>
-        <button onClick={() => changeLanguage("cs")} className="px-3 py-1 rounded bg-white text-black">CS</button>
-        <button onClick={() => changeLanguage("en")} className="px-3 py-1 rounded bg-white text-black">EN</button>
-      </div>
+          <div className="flex items-center gap-2">
+            <button
+              onClick={toggleMute}
+              className={`px-3 py-1 rounded-lg text-sm font-semibold shadow-soft
+                ${muted ? "bg-neutral-200 text-slate-700" : "bg-emerald-500 text-white hover:bg-emerald-600"}
+              `}
+              title={muted ? "Zapnout zvuk" : "Vypnout zvuk"}
+            >
+              {muted ? "🔇" : "🔊"}
+            </button>
+            <div className="h-5 w-px bg-neutral-300 mx-1" />
+            <button
+              onClick={() => changeLanguage("cs")}
+              className="px-2 py-1 rounded-lg text-sm bg-white border border-neutral-200 hover:bg-neutral-100"
+            >CS</button>
+            <button
+              onClick={() => changeLanguage("en")}
+              className="px-2 py-1 rounded-lg text-sm bg-white border border-neutral-200 hover:bg-neutral-100"
+            >EN</button>
+          </div>
+        </div>
+      </header>
 
-      <div className="max-w-5xl mx-auto p-4">
-        <h1 className="text-3xl font-bold mb-4">{t("welcome")}</h1>
+      {/* badge buildu – nenápadný */}
+      <div className="fixed bottom-3 right-3 text-[10px] text-slate-500">build {sha || "dev"}</div>
+
+      {/* obsah */}
+      <main className="max-w-5xl mx-auto px-4 py-10">
+        <div className="mb-8">
+          <h1 className="text-3xl font-extrabold tracking-tight">{t("welcome")}</h1>
+        </div>
         <Game />
-      </div>
+      </main>
     </div>
   );
 }

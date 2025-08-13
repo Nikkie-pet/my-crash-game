@@ -1,0 +1,31 @@
+<svg width="1200" height="630" viewBox="0 0 1200 630" xmlns="http://www.w3.org/2000/svg">
+  <rect width="1200" height="630" fill="#F5F5F4"/>
+  <g transform="translate(80,80)">
+    <rect width="1040" height="470" rx="28" fill="white" stroke="#e5e7eb"/>
+    <circle cx="64" cy="64" r="16" fill="#10B981"/>
+    <text x="96" y="70" font-family="Inter, system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', Arial" font-size="44" font-weight="800" fill="#0f172a">
+      Crash Aim
+    </text>
+
+    <text x="96" y="120" font-family="Inter, system-ui" font-size="22" fill="#475569">
+      Zastav multiplikátor co nejblíže cíli. Denní mód, streaky a žebříčky.
+    </text>
+
+    <g transform="translate(96,180)">
+      <rect width="360" height="140" rx="16" fill="#F8FAFC" stroke="#e5e7eb"/>
+      <text x="20" y="46" font-family="Inter, system-ui" font-size="16" fill="#64748b">Target</text>
+      <text x="20" y="100" font-family="Inter, system-ui" font-size="48" font-weight="800" fill="#10B981">1.78x</text>
+    </g>
+
+    <g transform="translate(496,180)">
+      <rect width="360" height="140" rx="16" fill="#F8FAFC" stroke="#e5e7eb"/>
+      <text x="20" y="46" font-family="Inter, system-ui" font-size="16" fill="#64748b">Your value</text>
+      <text x="20" y="100" font-family="Inter, system-ui" font-size="48" font-weight="800" fill="#0f172a">1.75x</text>
+    </g>
+
+    <g transform="translate(896,180)">
+      <rect width="124" height="140" rx="16" fill="#10B981"/>
+      <text x="24" y="92" font-family="Inter, system-ui" font-size="22" font-weight="800" fill="white">STOP</text>
+    </g>
+  </g>
+</svg>
