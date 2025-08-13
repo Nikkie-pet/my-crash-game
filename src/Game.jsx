@@ -92,7 +92,7 @@ function Ghost({ children, ...props }) {
 export default function Game() {
   const { t, i18n } = useTranslation();
 
-  // ===== Pomalejší / hratelnější tempo =====
+  // ===== hratelnější tempo =====
   const MAX_TIME = 12000;         // ms na kolo (víc času trefit)
   const PERFECT_THR = 0.02;
   const GOOD_THR = 0.05;
@@ -375,18 +375,18 @@ export default function Game() {
   // ===== Lokalizované „pravidla“ (bez zásahu do locales) =====
   const rules = i18n.language?.startsWith("cs")
     ? {
-        title: "📜 Pravidla hry",
-        goal: "Cíl hry: Zastav multiplikátor co nejblíže k cíli (třeba 2.13x vs 2.15x).",
-        controls: "Ovládání: ⏎ Enter = Start/Confirm, Space = Stop. Nebo použij tlačítka Start/Stop.",
-        scoring: "Bodování: Čím menší rozdíl mezi trefou a cílem, tím více bodů. Perfect (≤ 0.02) přidává bonus a zvyšuje streak.",
+        title: "📜 Pravidla",
+        goal: "Cíl: Zastav multiplikátor co nejblíže k cíli (např. 2.13x vs 2.15x).",
+        controls: "Ovládání: ⏎ Enter = Start/Confirm, Space = Stop. Nebo tlačítka Start/Stop.",
+        scoring: "Bodování: Čím menší chyba, tím více bodů. Perfect (≤ 0.02) dává bonus a zvyšuje streak.",
         tip: "Tip: Sleduj tempo růstu (base speed + ramp-up). Na Easy je růst pomalejší."
       }
     : {
         title: "📜 Rules",
         goal: "Goal: Stop the multiplier as close to the target as possible (e.g. 2.13x vs 2.15x).",
-        controls: "Controls: ⏎ Enter = Start/Confirm, Space = Stop. Or use the buttons.",
-        scoring: "Scoring: The smaller the error, the more points. Perfect (≤ 0.02) grants a bonus and increases streak.",
-        tip: "Tip: Watch the growth pace (base speed + ramp-up). Easy grows slower."
+        controls: "Controls: ⏎ Enter = Start/Confirm, Space = Stop. Or use Start/Stop buttons.",
+        scoring: "Scoring: The smaller the error, the more points. Perfect (≤ 0.02) adds a bonus and increases streak.",
+        tip: "Tip: Watch growth pace (base speed + ramp-up). Easy grows slower."
       };
 
   // ===== UI =====
@@ -533,16 +533,18 @@ export default function Game() {
         </section>
       )}
 
-      {/* PRAVIDLA (okraj stránky) */}
-      <section className="rounded-2xl bg-white shadow-soft border border-neutral-200 p-6 dark:bg-slate-900 dark:border-slate-800">
-        <div className="text-base font-semibold mb-2">{rules.title}</div>
-        <ul className="text-sm text-slate-700 dark:text-slate-300 grid gap-1">
-          <li>• {rules.goal}</li>
-          <li>• {rules.controls}</li>
-          <li>• {rules.scoring}</li>
-          <li>• {rules.tip}</li>
-        </ul>
-      </section>
+      {/* PRAVIDLA – sticky spodní panel (nepřekáží ovládání) */}
+      <div className="sticky bottom-3 z-40">
+        <section className="mx-auto max-w-3xl rounded-2xl bg-white shadow-soft border border-neutral-200 p-4 dark:bg-slate-900 dark:border-slate-800">
+          <div className="text-sm font-semibold mb-1">{rules.title}</div>
+          <ul className="text-xs text-slate-700 dark:text-slate-300 grid gap-1">
+            <li>• {rules.goal}</li>
+            <li>• {rules.controls}</li>
+            <li>• {rules.scoring}</li>
+            <li>• {rules.tip}</li>
+          </ul>
+        </section>
+      </div>
     </div>
   );
 }
