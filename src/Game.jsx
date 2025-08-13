@@ -93,10 +93,10 @@ export default function Game() {
   const { t, i18n } = useTranslation();
 
   // ===== hratelnější tempo =====
-  const MAX_TIME = 12000;         // ms na kolo (víc času trefit)
+  const MAX_TIME = 12000;         // ms na kolo
   const PERFECT_THR = 0.02;
   const GOOD_THR = 0.05;
-  const RAMP_MAX_BOOST = 0.6;     // mírnější zrychlování v čase
+  const RAMP_MAX_BOOST = 0.6;     // mírnější zrychlování
 
   // Streak násobení
   const STREAK_STEP = 0.10;
@@ -122,8 +122,8 @@ export default function Game() {
   const [difficulty, setDifficulty] = useState(() => localStorage.getItem("cg_diff") || "easy");
 
   const [target, setTarget] = useState(1.78);
-  const [value, setValue] = useState(1.00);           // interní „skutečná“ hodnota
-  const [displayValue, setDisplayValue] = useState(1.00); // co se vykresluje (inertní)
+  const [value, setValue] = useState(1.00);                // interní hodnota
+  const [displayValue, setDisplayValue] = useState(1.00);  // inerční zobrazení
 
   const [result, setResult] = useState(null);
   const [speed, setSpeed] = useState(0.03);
@@ -149,6 +149,8 @@ export default function Game() {
   const elapsedRef = useRef(null);
   const rafRef = useRef(null);
   const audioCtxRef = useRef(null);
+  // Multiplayer: per-run limit (host může poslat jiný maxTime)
+  const mpMaxTimeRef = useRef(MAX_TIME);
 
   // ===== Helpers =====
   const rand = (min, max, d = 3) => Number((Math.random() * (max - min) + min).toFixed(d));
@@ -206,7 +208,7 @@ export default function Game() {
     }
   }, []);
 
-  // ===== Mute sync z App.jsx (posílá CustomEvent) =====
+  // ===== Mute sync z App.jsx =====
   useEffect(() => {
     const onMute = (e) => setMuted(!!e.detail?.muted);
     window.addEventListener("cg-mute-change", onMute);
@@ -228,7 +230,44 @@ export default function Game() {
     return () => cancelAnimationFrame(rafRef.current);
   }, [value]);
 
-  // ===== Start kola =====
+  // ===== Multiplayer: start kola se sdílenými parametry =====
+  useEffect(() => {
+    const onMpRound = (e) => {
+      const { seed, tick: tk, speed: spd, maxTime } = e.detail || {};
+      if (!tk || !spd) return;
+
+      const MAX = Number(maxTime || 12000);
+      mpMaxTimeRef.current = MAX;
+
+      setSpeed(Number(spd));
+      setTick(Number(tk));
+
+      const maxV = computeMaxReach(1.0, Number(spd), Number(tk), MAX);
+      setMaxReach(maxV);
+
+      // deterministický target ze seed
+      const rng = (() => {
+        let s = Number(seed) % 2147483647;
+        return () => (s = (s * 48271) % 2147483647) / 2147483647;
+      })();
+      const tgt = Number((1 + rng() * (maxV - 1)).toFixed(2));
+      setTarget(tgt);
+
+      setValue(1.00);
+      setDisplayValue(1.00);
+      setElapsed(0);
+      setResult(null);
+      setPhase("ready");
+
+      setTimeout(() => beginRunning(), 600);
+    };
+
+    window.addEventListener("cg-mp-round", onMpRound);
+    return () => window.removeEventListener("cg-mp-round", onMpRound);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // ===== Start kola (solo) =====
   const startRound = () => {
     const now = Date.now();
     if (resetAt && now >= resetAt) {
@@ -248,7 +287,7 @@ export default function Game() {
     const maxV = computeMaxReach(1.0, s, tk, MAX_TIME);
     setMaxReach(maxV);
 
-    // cíl
+    // cíl (daily nebo náhodný v rozsahu)
     const todayKey = new Date().toISOString().slice(0, 10);
     const seededBetween = (min, max) => {
       const seed = Array.from(todayKey).reduce((a, ch) => a + ch.charCodeAt(0), 0);
@@ -258,6 +297,8 @@ export default function Game() {
     const tgt = dailyMode
       ? Math.max(1, Math.min(maxV, seededBetween(1.0, maxV)))
       : Number((1 + Math.random() * (maxV - 1)).toFixed(2));
+
+    mpMaxTimeRef.current = MAX_TIME; // solo režim používá lokální MAX_TIME
 
     setTarget(tgt);
     setValue(1.00); setDisplayValue(1.00);
@@ -288,7 +329,7 @@ export default function Game() {
     elapsedRef.current = setInterval(() => {
       const e = performance.now() - startedAt;
       setElapsed(e);
-      if (e >= MAX_TIME) {
+      if (e >= mpMaxTimeRef.current) {
         clearInterval(growRef.current); clearInterval(elapsedRef.current);
         const diff = Math.abs(value - target) + 0.15; // penalizace za timeout
         finishRound(diff);
@@ -372,7 +413,7 @@ export default function Game() {
     };
   }, []);
 
-  // ===== Lokalizované „pravidla“ (bez zásahu do locales) =====
+  // ===== Lokalizované „pravidla“ =====
   const rules = i18n.language?.startsWith("cs")
     ? {
         title: "📜 Pravidla",
@@ -456,7 +497,7 @@ export default function Game() {
             <Info label={t("baseSpeed")} value={`${speed.toFixed(3)}/tick`} hint={i18n.language?.startsWith("cs") ? "Základní tempo růstu. Zrychluje se ramp-upem." : "Base growth pace, accelerates with ramp-up."} />
             <Info label="Tick" value={`${tick}ms`} hint={i18n.language?.startsWith("cs") ? "Jak často se hodnota přepočítá. Vyšší = pomalejší." : "How often value updates. Higher = slower."} />
             <Info label="Ramp-up" value={`+${Math.round(RAMP_MAX_BOOST*100)}%`} hint={i18n.language?.startsWith("cs") ? "Postupné zrychlování v průběhu kola." : "Gradual acceleration during the round."} />
-            <Info label={t("timeLimit")} value={`${(MAX_TIME/1000).toFixed(0)}s`} hint={i18n.language?.startsWith("cs") ? "Po limitu se kolo ukončí s penalizací." : "After limit, the round ends with a penalty."} />
+            <Info label={t("timeLimit")} value={`${(mpMaxTimeRef.current/1000).toFixed(0)}s`} hint={i18n.language?.startsWith("cs") ? "Po limitu se kolo ukončí s penalizací." : "After limit, the round ends with a penalty."} />
           </div>
           <div className="flex justify-center gap-3 mt-6">
             <Primary onClick={beginRunning}>{t("startNow")}</Primary>
@@ -469,7 +510,7 @@ export default function Game() {
           <div className="h-2 w-full bg-neutral-200 rounded-full overflow-hidden dark:bg-slate-800">
             <div
               className="h-2 bg-emerald-500 transition-[width] duration-75"
-              style={{ width: `${Math.min((elapsed / MAX_TIME) * 100, 100)}%` }}
+              style={{ width: `${Math.min((elapsed / mpMaxTimeRef.current) * 100, 100)}%` }}
             />
           </div>
 
@@ -533,7 +574,7 @@ export default function Game() {
         </section>
       )}
 
-      {/* PRAVIDLA – sticky spodní panel (nepřekáží ovládání) */}
+      {/* PRAVIDLA – sticky spodní panel */}
       <div className="sticky bottom-3 z-40">
         <section className="mx-auto max-w-3xl rounded-2xl bg-white shadow-soft border border-neutral-200 p-4 dark:bg-slate-900 dark:border-slate-800">
           <div className="text-sm font-semibold mb-1">{rules.title}</div>
