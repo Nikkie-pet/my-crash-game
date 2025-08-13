@@ -1,3 +1,4 @@
+// src/App.jsx
 import React from "react";
 import Game from "./Game";
 import { useTranslation } from "react-i18next";
@@ -5,13 +6,12 @@ import { useTranslation } from "react-i18next";
 export default function App() {
   const { t, i18n } = useTranslation();
 
-  // ===== build badge
+  // === Build badge (Vercel)
   const sha = (import.meta.env.VERCEL_GIT_COMMIT_SHA || "").slice(0, 7);
 
-  // ===== zvuk (mute)
+  // === Mute (ukládáme do localStorage a posíláme eventem na Game)
   const [muted, setMuted] = React.useState(() => localStorage.getItem("muted") === "1");
   React.useEffect(() => {
-    // sync do Game
     window.dispatchEvent(new CustomEvent("cg-mute-change", { detail: { muted } }));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -23,22 +23,18 @@ export default function App() {
     window.dispatchEvent(new CustomEvent("cg-mute-change", { detail: { muted: next } }));
   };
 
-  // ===== jazyk
+  // === Jazyk
   const changeLanguage = (lng) => {
     i18n.changeLanguage(lng);
     localStorage.setItem("lang", lng);
   };
 
-  // ===== dark mode (class na <html>)
+  // === Dark mode (class na <html>) + persist
   const getInitialTheme = () => {
     const saved = localStorage.getItem("theme");
     if (saved) return saved; // "dark" | "light"
-    // auto podle OS
-    return window.matchMedia && window.matchMedia("(prefers-color-scheme: dark)").matches
-      ? "dark"
-      : "light";
+    return window.matchMedia?.("(prefers-color-scheme: dark)")?.matches ? "dark" : "light";
   };
-
   const [theme, setTheme] = React.useState(getInitialTheme);
   React.useEffect(() => {
     const root = document.documentElement;
@@ -46,12 +42,11 @@ export default function App() {
     else root.classList.remove("dark");
     localStorage.setItem("theme", theme);
   }, [theme]);
-
   const toggleTheme = () => setTheme((t) => (t === "dark" ? "light" : "dark"));
 
   return (
     <div className="min-h-screen">
-      {/* horní lišta */}
+      {/* Horní lišta */}
       <header className="sticky top-0 z-40 bg-neutral-50/80 backdrop-blur border-b border-neutral-200 dark:bg-slate-950/70 dark:border-slate-800">
         <div className="max-w-5xl mx-auto px-4 h-14 flex items-center justify-between">
           <div className="flex items-center gap-3">
@@ -101,13 +96,17 @@ export default function App() {
         </div>
       </header>
 
-      {/* build badge */}
-      <div className="fixed bottom-3 right-3 text-[10px] text-slate-500 dark:text-slate-400">build {sha || "dev"}</div>
+      {/* Build badge */}
+      <div className="fixed bottom-3 right-3 text-[10px] text-slate-500 dark:text-slate-400">
+        build {sha || "dev"}
+      </div>
 
-      {/* obsah */}
+      {/* Obsah */}
       <main className="max-w-5xl mx-auto px-4 py-10">
         <div className="mb-8">
-          <h1 className="text-3xl font-extrabold tracking-tight">{t("welcome")}</h1>
+          <h1 className="text-3xl font-extrabold tracking-tight">
+            {t("welcome")}
+          </h1>
         </div>
         <Game />
       </main>
