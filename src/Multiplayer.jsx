@@ -22,7 +22,11 @@ export default function Multiplayer() {
   const [pusher, setPusher] = useState(null);
   const [isHost, setIsHost] = useState(false);
 
-  useEffect(() => () => { try { pusher?.disconnect(); } catch {} }, [pusher]);
+  useEffect(() => {
+    return () => {
+      try { pusher?.disconnect(); } catch {}
+    };
+  }, [pusher]);
 
   const joinRoom = async () => {
     if (!room.trim()) return;
@@ -39,8 +43,7 @@ export default function Multiplayer() {
       const list = [];
       mems.each((m) => list.push(m.info?.name || "player"));
       setMembers(list);
-
-      // jednoduché pravidlo: host je abecedně první jméno
+      // jednoduché MVP pravidlo: host = abecedně první jméno v místnosti
       setIsHost([...list].sort()[0] === username);
     });
 
@@ -52,7 +55,7 @@ export default function Multiplayer() {
       setMembers((prev) => prev.filter((n) => n !== (member.info?.name || "player")));
     });
 
-    // poslech klientských událostí (client-*)
+    // klientská událost: start kola od hosta
     const onClientRoundStart = (payload) => {
       window.dispatchEvent(new CustomEvent("cg-mp-round", { detail: payload }));
     };
@@ -62,11 +65,17 @@ export default function Multiplayer() {
   };
 
   const leaveRoom = () => {
-    try { pusher?.unsubscribe(`presence-${room}`); pusher?.disconnect(); } catch {}
-    setJoined(false); setMembers([]); setChannel(null); setPusher(null);
+    try {
+      pusher?.unsubscribe(`presence-${room}`);
+      pusher?.disconnect();
+    } catch {}
+    setJoined(false);
+    setMembers([]);
+    setChannel(null);
+    setPusher(null);
   };
 
-  // Host: pošli start kola
+  // Host: vygeneruje parametry kola a rozešle je všem
   const startSynchronizedRound = () => {
     if (!channel) return;
     const payload = {
@@ -75,8 +84,9 @@ export default function Multiplayer() {
       speed: Number((0.03 + Math.random() * 0.02).toFixed(3)),   // 0.030–0.050
       maxTime: 12000,
     };
+    // Pusher client event (vyžaduje povolené "Client events" v App Settings)
     channel.trigger("client-round-start", payload);
-    // ať host taky startne okamžitě:
+    // host spustí taky lokálně
     window.dispatchEvent(new CustomEvent("cg-mp-round", { detail: payload }));
   };
 

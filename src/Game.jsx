@@ -93,10 +93,10 @@ export default function Game() {
   const { t, i18n } = useTranslation();
 
   // ===== hratelnější tempo =====
-  const MAX_TIME = 12000;         // ms na kolo
+  const MAX_TIME = 12000;         // ms/kolo
   const PERFECT_THR = 0.02;
   const GOOD_THR = 0.05;
-  const RAMP_MAX_BOOST = 0.6;     // mírnější zrychlování
+  const RAMP_MAX_BOOST = 0.6;
 
   // Streak násobení
   const STREAK_STEP = 0.10;
@@ -110,7 +110,7 @@ export default function Game() {
   // LocalStorage klíče
   const LS = { points: "cg_points", bestError: "cg_best_error", history: "cg_history" };
 
-  // Obtížnosti (ovlivní rychlost i tick)
+  // Obtížnosti
   const DIFFS = {
     easy:   { speedMin: 0.020, speedMax: 0.040, tickMin: 28, tickMax: 34 },
     normal: { speedMin: 0.030, speedMax: 0.050, tickMin: 26, tickMax: 32 },
@@ -122,8 +122,8 @@ export default function Game() {
   const [difficulty, setDifficulty] = useState(() => localStorage.getItem("cg_diff") || "easy");
 
   const [target, setTarget] = useState(1.78);
-  const [value, setValue] = useState(1.00);                // interní hodnota
-  const [displayValue, setDisplayValue] = useState(1.00);  // inerční zobrazení
+  const [value, setValue] = useState(1.00);
+  const [displayValue, setDisplayValue] = useState(1.00);
 
   const [result, setResult] = useState(null);
   const [speed, setSpeed] = useState(0.03);
@@ -149,7 +149,7 @@ export default function Game() {
   const elapsedRef = useRef(null);
   const rafRef = useRef(null);
   const audioCtxRef = useRef(null);
-  // Multiplayer: per-run limit (host může poslat jiný maxTime)
+  // Multiplayer: maxTime pro aktuální kolo (host může poslat jinou hodnotu)
   const mpMaxTimeRef = useRef(MAX_TIME);
 
   // ===== Helpers =====
@@ -217,7 +217,7 @@ export default function Game() {
 
   // ===== Inertie (displayValue plynule dohání value) =====
   useEffect(() => {
-    const INERTIA = 0.18; // 18 % rozdílu / frame
+    const INERTIA = 0.18;
     const tick = () => {
       setDisplayValue((d) => {
         const diff = value - d;
@@ -277,17 +277,14 @@ export default function Game() {
     }
     if (playsLeft <= 0) { alert(t("alertQuota")); return; }
 
-    // obtížnost → rychlost/tick
     const d = DIFFS[difficulty] || DIFFS.easy;
     const s = rand(d.speedMin, d.speedMax);
     const tk = Math.floor(rand(d.tickMin, d.tickMax, 0));
     setSpeed(s); setTick(tk);
 
-    // maximum dosažitelné v tomhle kole (pro UI rozsah cíle)
     const maxV = computeMaxReach(1.0, s, tk, MAX_TIME);
     setMaxReach(maxV);
 
-    // cíl (daily nebo náhodný v rozsahu)
     const todayKey = new Date().toISOString().slice(0, 10);
     const seededBetween = (min, max) => {
       const seed = Array.from(todayKey).reduce((a, ch) => a + ch.charCodeAt(0), 0);
@@ -298,7 +295,7 @@ export default function Game() {
       ? Math.max(1, Math.min(maxV, seededBetween(1.0, maxV)))
       : Number((1 + Math.random() * (maxV - 1)).toFixed(2));
 
-    mpMaxTimeRef.current = MAX_TIME; // solo režim používá lokální MAX_TIME
+    mpMaxTimeRef.current = MAX_TIME; // solo režim
 
     setTarget(tgt);
     setValue(1.00); setDisplayValue(1.00);
@@ -318,20 +315,18 @@ export default function Game() {
     setPhase("running");
     const startedAt = performance.now();
 
-    // růst hodnoty
     growRef.current = setInterval(() => {
       const e = performance.now() - startedAt;
       const ramp = 1 + Math.min(e / 4000, RAMP_MAX_BOOST);
       setValue((v) => +(v + speed * ramp).toFixed(2));
     }, tick);
 
-    // hlídání času
     elapsedRef.current = setInterval(() => {
       const e = performance.now() - startedAt;
       setElapsed(e);
       if (e >= mpMaxTimeRef.current) {
         clearInterval(growRef.current); clearInterval(elapsedRef.current);
-        const diff = Math.abs(value - target) + 0.15; // penalizace za timeout
+        const diff = Math.abs(value - target) + 0.15;
         finishRound(diff);
       }
     }, 50);
@@ -346,7 +341,7 @@ export default function Game() {
     finishRound(diff);
   };
 
-  // Sdílení výsledku (volitelné)
+  // Sdílení výsledku
   const shareResult = async (res) => {
     const text = `I hit ${value.toFixed(2)}x vs target ${target.toFixed(2)}x (err ${res.diff.toFixed(2)}) — score +${res.runPoints}. Try it: ${location.href}`;
     try {
