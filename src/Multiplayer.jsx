@@ -2,6 +2,8 @@
 import React, { useEffect, useState } from "react";
 import { createPusher } from "./realtime/pusherClient";
 
+console.log("[Multiplayer] component loaded"); // uvidíš v DevTools → Console
+
 function Btn({ children, ...props }) {
   return (
     <button
@@ -23,13 +25,20 @@ export default function Multiplayer() {
   const [isHost, setIsHost] = useState(false);
 
   useEffect(() => {
-    return () => {
-      try { pusher?.disconnect(); } catch {}
-    };
+    return () => { try { pusher?.disconnect(); } catch {} };
   }, [pusher]);
 
   const joinRoom = async () => {
     if (!room.trim()) return;
+
+    // bezpečnost: zkontroluj, že máme klíče (ať to nepadá)
+    const key = import.meta.env.VITE_PUSHER_KEY;
+    const cluster = import.meta.env.VITE_PUSHER_CLUSTER;
+    if (!key || !cluster) {
+      alert("Chybí VITE_PUSHER_KEY / VITE_PUSHER_CLUSTER (Vercel env). Multiplayer se nespustí.");
+      return;
+    }
+
     localStorage.setItem("mp_name", username);
     localStorage.setItem("mp_room", room);
 
@@ -43,7 +52,7 @@ export default function Multiplayer() {
       const list = [];
       mems.each((m) => list.push(m.info?.name || "player"));
       setMembers(list);
-      // jednoduché MVP pravidlo: host = abecedně první jméno v místnosti
+      // MVP pravidlo: host = abecedně první jméno
       setIsHost([...list].sort()[0] === username);
     });
 
@@ -55,7 +64,7 @@ export default function Multiplayer() {
       setMembers((prev) => prev.filter((n) => n !== (member.info?.name || "player")));
     });
 
-    // klientská událost: start kola od hosta
+    // klientská událost: start kola od hosta → rozhoď přes window event do Game.jsx
     const onClientRoundStart = (payload) => {
       window.dispatchEvent(new CustomEvent("cg-mp-round", { detail: payload }));
     };
@@ -65,17 +74,11 @@ export default function Multiplayer() {
   };
 
   const leaveRoom = () => {
-    try {
-      pusher?.unsubscribe(`presence-${room}`);
-      pusher?.disconnect();
-    } catch {}
-    setJoined(false);
-    setMembers([]);
-    setChannel(null);
-    setPusher(null);
+    try { pusher?.unsubscribe(`presence-${room}`); pusher?.disconnect(); } catch {}
+    setJoined(false); setMembers([]); setChannel(null); setPusher(null);
   };
 
-  // Host: vygeneruje parametry kola a rozešle je všem
+  // host odešle parametry kola všem
   const startSynchronizedRound = () => {
     if (!channel) return;
     const payload = {
@@ -84,10 +87,8 @@ export default function Multiplayer() {
       speed: Number((0.03 + Math.random() * 0.02).toFixed(3)),   // 0.030–0.050
       maxTime: 12000,
     };
-    // Pusher client event (vyžaduje povolené "Client events" v App Settings)
-    channel.trigger("client-round-start", payload);
-    // host spustí taky lokálně
-    window.dispatchEvent(new CustomEvent("cg-mp-round", { detail: payload }));
+    channel.trigger("client-round-start", payload); // vyžaduje zapnuté "Client events" v Pusher App Settings
+    window.dispatchEvent(new CustomEvent("cg-mp-round", { detail: payload })); // ať host startne hned taky
   };
 
   return (
