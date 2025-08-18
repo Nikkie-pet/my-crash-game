@@ -1,39 +1,48 @@
 // api/pusher-auth.js
 import Pusher from "pusher";
 
-function send(res, code, data) {
+function setCors(res) {
+  // pro debug povolíme všechny origins; až to pojede, klidně zúžíme
+  res.setHeader("Access-Control-Allow-Origin", "*");
+  res.setHeader("Access-Control-Allow-Methods", "POST, OPTIONS");
+  res.setHeader("Access-Control-Allow-Headers", "Content-Type");
+}
+
+function send(res, code, data = null) {
+  setCors(res);
   res.statusCode = code;
-  res.setHeader("Content-Type", "application/json; charset=utf-8");
-  res.end(JSON.stringify(data));
+  if (data !== null) {
+    res.setHeader("Content-Type", "application/json; charset=utf-8");
+    res.end(JSON.stringify(data));
+  } else {
+    res.end();
+  }
 }
 
 async function parseBody(req) {
   const ct = (req.headers["content-type"] || "").toLowerCase();
-
   const raw = await new Promise((resolve, reject) => {
     let data = "";
     req.on("data", (c) => (data += c));
     req.on("end", () => resolve(data));
     req.on("error", reject);
   });
-
   if (ct.includes("application/json")) {
     try { return JSON.parse(raw || "{}"); } catch { return {}; }
   }
-
-  // form-urlencoded (co posílá pusher-js při channelAuthorization: transport:'ajax')
   const obj = {};
   for (const [k, v] of new URLSearchParams(raw)) obj[k] = v;
   return obj;
 }
 
 export default async function handler(req, res) {
+  if (req.method === "OPTIONS") return send(res, 200, null); // preflight OK
   if (req.method !== "POST") {
-    res.setHeader("Allow", "POST");
+    res.setHeader("Allow", "POST, OPTIONS");
     return send(res, 405, { error: "Method not allowed" });
   }
 
-  // --- kontrola ENV (nezobrazujeme tajemství) ---
+  // ENV sanity
   const envOk = {
     appId: !!process.env.PUSHER_APP_ID,
     key: !!process.env.PUSHER_KEY,
@@ -62,13 +71,11 @@ export default async function handler(req, res) {
       return send(res, 400, { error: "Missing socket_id or channel_name" });
     }
 
-    // Presence vyžaduje user_id + user_info
     const presenceData = {
       user_id: `${Date.now()}_${Math.floor(Math.random() * 1e6)}`,
       user_info: { name: username },
     };
 
-    // ⬇⬇ DŮLEŽITÉ: u Node SDK je správná metoda `authenticate`
     const auth = pusher.authenticate(socketId, channelName, presenceData);
     return send(res, 200, auth);
   } catch (e) {
