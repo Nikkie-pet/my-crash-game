@@ -2,29 +2,45 @@
 import Pusher from "pusher-js";
 
 /**
- * Vite načítá pouze proměnné s prefixem VITE_.
- * Ujisti se, že máš .env.local (lokálně) a na Vercelu (Production/Preview):
- *  VITE_PUSHER_KEY=...
- *  VITE_PUSHER_CLUSTER=eu
+ * Debug logy Pusheru (zapni jen při ladění).
+ * Až bude vše OK, klidně nastav na false nebo řádek smaž.
  */
+Pusher.logToConsole = true;
 
+/**
+ * Vytvoří Pusher klienta pro frontend.
+ * Vyžaduje:
+ *  - VITE_PUSHER_KEY (public key z Pusheru)
+ *  - VITE_PUSHER_CLUSTER (např. "eu")
+ *  - volitelně VITE_PUSHER_AUTH_URL (pro lokální vývoj můžeš použít prod URL)
+ *
+ * Pokud VITE_PUSHER_AUTH_URL není nastavené, použije relativní "/api/pusher-auth"
+ * (to funguje na Vercelu i v `vercel dev`).
+ */
 export function createPusher(username = "anon") {
   const key = import.meta.env.VITE_PUSHER_KEY;
   const cluster = import.meta.env.VITE_PUSHER_CLUSTER;
 
   if (!key || !cluster) {
-    console.warn("Missing VITE_PUSHER_KEY or VITE_PUSHER_CLUSTER");
+    throw new Error("Missing VITE_PUSHER_KEY or VITE_PUSHER_CLUSTER");
   }
 
-  // pusher-js POSTne JSON na /api/pusher-auth
-  return new Pusher(key, {
+  // Lokálně můžeš přesměrovat autorizaci na produkční endpoint,
+  // aby Presence fungoval i bez `vercel dev`.
+  const authEndpoint =
+    import.meta.env.VITE_PUSHER_AUTH_URL || "/api/pusher-auth";
+
+  // Pozn.: pusher-js v8+ používá `channelAuthorization`
+  const p = new Pusher(key, {
     cluster,
-    authEndpoint: "/api/pusher-auth",
-    auth: {
-      headers: { "Content-Type": "application/json" },
-      params: { username }, // projde až do req.body.username
+    forceTLS: true,
+    channelAuthorization: {
+      endpoint: authEndpoint,
+      transport: "ajax",        // pošle form-urlencoded
+      params: { username },     // dorazí na server (api/pusher-auth) jako pole
     },
-    // pro client-události musí být v Pusher App Settings zapnuto "Client events"
-    enableStats: false,
+    enabledTransports: ["ws", "wss"],
   });
+
+  return p;
 }

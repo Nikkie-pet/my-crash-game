@@ -1,8 +1,10 @@
 // src/Game.jsx
-import React, { useState, useEffect, useRef } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 
-/* ---------- Tooltip (bez knihoven) ---------- */
+/* =======================
+   Mini UI pomocné prvky
+   ======================= */
 function Tooltip({ content, children }) {
   const [open, setOpen] = useState(false);
   return (
@@ -24,7 +26,6 @@ function Tooltip({ content, children }) {
   );
 }
 
-/* ---------- Drobné UI komponenty ---------- */
 function Info({ label, value, hint }) {
   return (
     <Tooltip content={hint}>
@@ -36,12 +37,12 @@ function Info({ label, value, hint }) {
   );
 }
 
-function Card({ title, empty, children }) {
+function Card({ title, children, empty }) {
   const isEmpty = !children || (Array.isArray(children) && children.length === 0);
   return (
     <section className="rounded-2xl bg-white shadow-soft border border-neutral-200 p-6 dark:bg-slate-900 dark:border-slate-800">
       <div className="font-semibold mb-3">{title}</div>
-      {isEmpty ? <div className="text-sm text-slate-500 dark:text-slate-400">{empty}</div> : <ol className="text-sm grid gap-1">{children}</ol>}
+      {isEmpty ? <div className="text-sm text-slate-500 dark:text-slate-400">{empty}</div> : children}
     </section>
   );
 }
@@ -55,72 +56,82 @@ function Row({ left, right }) {
   );
 }
 
-function Primary({ children, ...props }) {
+function Primary({ children, className = "", ...props }) {
   return (
     <button
       {...props}
-      className="px-5 py-3 rounded-xl bg-slate-900 text-white hover:bg-slate-800 active:scale-[.99] transition shadow-soft dark:bg-white dark:text-slate-900 dark:hover:bg-neutral-100"
+      className={
+        "px-5 py-3 rounded-xl bg-slate-900 text-white hover:bg-slate-800 active:scale-[.99] transition shadow-soft dark:bg-white dark:text-slate-900 dark:hover:bg-neutral-100 " +
+        className
+      }
+    >
+      {children}
+    </button>
+  );
+}
+function Accent({ children, className = "", ...props }) {
+  return (
+    <button
+      {...props}
+      className={
+        "px-5 py-3 rounded-xl bg-emerald-500 text-white hover:bg-emerald-600 active:scale-[.99] transition shadow-soft " +
+        className
+      }
+    >
+      {children}
+    </button>
+  );
+}
+function Ghost({ children, className = "", ...props }) {
+  return (
+    <button
+      {...props}
+      className={
+        "px-5 py-3 rounded-xl bg-white border border-neutral-200 text-slate-900 hover:bg-neutral-100 active:scale-[.99] transition dark:bg-slate-900 dark:text-slate-100 dark:border-slate-700 dark:hover:bg-slate-800 " +
+        className
+      }
     >
       {children}
     </button>
   );
 }
 
-function Accent({ children, ...props }) {
-  return (
-    <button
-      {...props}
-      className="px-5 py-3 rounded-xl bg-emerald-500 text-white hover:bg-emerald-600 active:scale-[.99] transition shadow-soft"
-    >
-      {children}
-    </button>
-  );
-}
-
-function Ghost({ children, ...props }) {
-  return (
-    <button
-      {...props}
-      className="px-5 py-3 rounded-xl bg-white border border-neutral-200 text-slate-900 hover:bg-neutral-100 active:scale-[.99] transition dark:bg-slate-900 dark:text-slate-100 dark:border-slate-700 dark:hover:bg-slate-800"
-    >
-      {children}
-    </button>
-  );
-}
-
-/* ---------- Hlavní komponenta hry ---------- */
+/* =======================
+   Hlavní komponenta hry
+   ======================= */
 export default function Game() {
   const { t, i18n } = useTranslation();
 
-  // ===== hratelnější tempo =====
-  const MAX_TIME = 12000;         // ms/kolo
+  // ----- Konstanta & parametry -----
+  const MAX_TIME = 12000; // ms limit kola
   const PERFECT_THR = 0.02;
   const GOOD_THR = 0.05;
   const RAMP_MAX_BOOST = 0.6;
 
-  // Streak násobení
+  // streak násobení
   const STREAK_STEP = 0.10;
   const STREAK_CAP = 2.0;
 
-  // Kvóta 30 her / 12 h
+  // kvóta 30 her / 12 h
   const QUOTA_TOTAL = 30;
   const QUOTA_WINDOW_HOURS = 12;
   const LS_QUOTA = "cg_quota";
 
-  // LocalStorage klíče
-  const LS = { points: "cg_points", bestError: "cg_best_error", history: "cg_history" };
+  // localStorage klíče
+  const LS = { points: "cg_points", bestError: "cg_best_error", history: "cg_history", diff: "cg_diff" };
 
-  // Obtížnosti
+  // obtížnosti
   const DIFFS = {
     easy:   { speedMin: 0.020, speedMax: 0.040, tickMin: 28, tickMax: 34 },
     normal: { speedMin: 0.030, speedMax: 0.050, tickMin: 26, tickMax: 32 },
     hard:   { speedMin: 0.040, speedMax: 0.060, tickMin: 24, tickMax: 30 }
   };
 
-  // ===== Stavy =====
-  const [phase, setPhase] = useState("idle");     // idle | ready | running | done
-  const [difficulty, setDifficulty] = useState(() => localStorage.getItem("cg_diff") || "easy");
+  // ----- Stavy -----
+  const [phase, setPhase] = useState("idle"); // idle | ready | countdown | running | done
+  const [countdown, setCountdown] = useState(0);
 
+  const [difficulty, setDifficulty] = useState(() => localStorage.getItem(LS.diff) || "easy");
   const [target, setTarget] = useState(1.78);
   const [value, setValue] = useState(1.00);
   const [displayValue, setDisplayValue] = useState(1.00);
@@ -144,17 +155,17 @@ export default function Game() {
 
   const [muted, setMuted] = useState(() => localStorage.getItem("muted") === "1");
 
-  // Timery / refy
+  // ----- Refy / časovače -----
   const growRef = useRef(null);
   const elapsedRef = useRef(null);
   const rafRef = useRef(null);
   const audioCtxRef = useRef(null);
-  // Multiplayer: maxTime pro aktuální kolo (host může poslat jinou hodnotu)
+  const cdRef = useRef(null);
+  // multiplayer maxTime pro kolo (může přijít z MP eventu)
   const mpMaxTimeRef = useRef(MAX_TIME);
 
-  // ===== Helpers =====
+  // ----- Helpery -----
   const rand = (min, max, d = 3) => Number((Math.random() * (max - min) + min).toFixed(d));
-
   const computeMaxReach = (base = 1.0, s, tickMs, maxMs) => {
     let v = base;
     for (let t = 0; t < maxMs; t += tickMs) {
@@ -163,7 +174,6 @@ export default function Game() {
     }
     return Number(v.toFixed(2));
   };
-
   const fmtTime = (ms) => {
     const s = Math.max(0, Math.floor(ms / 1000));
     const h = Math.floor(s / 3600);
@@ -171,10 +181,9 @@ export default function Game() {
     const ss = s % 60;
     return `${h}h ${m}m ${ss}s`;
   };
-
   const vibrate = (pattern = 20) => { try { if (navigator.vibrate) navigator.vibrate(pattern); } catch {} };
 
-  // Zvuk
+  // zvuk
   const ensureAudioCtx = () => {
     if (!audioCtxRef.current) {
       try { audioCtxRef.current = new (window.AudioContext || window.webkitAudioContext)(); } catch {}
@@ -190,7 +199,7 @@ export default function Game() {
     setTimeout(() => { try { osc.stop(); osc.disconnect(); g.disconnect(); } catch {} }, dur);
   };
 
-  // ===== Init persist & kvóta =====
+  // ----- Init z localStorage + kvóta -----
   useEffect(() => {
     const p = Number(localStorage.getItem(LS.points) || 0); if (!Number.isNaN(p)) setPoints(p);
     const be = Number(localStorage.getItem(LS.bestError) || Infinity); if (!Number.isNaN(be)) setBestError(be);
@@ -208,14 +217,14 @@ export default function Game() {
     }
   }, []);
 
-  // ===== Mute sync z App.jsx =====
+  // ----- Mute sync z App.jsx -----
   useEffect(() => {
     const onMute = (e) => setMuted(!!e.detail?.muted);
     window.addEventListener("cg-mute-change", onMute);
     return () => window.removeEventListener("cg-mute-change", onMute);
   }, []);
 
-  // ===== Inertie (displayValue plynule dohání value) =====
+  // ----- Inertie zobrazené hodnoty -----
   useEffect(() => {
     const INERTIA = 0.18;
     const tick = () => {
@@ -230,10 +239,10 @@ export default function Game() {
     return () => cancelAnimationFrame(rafRef.current);
   }, [value]);
 
-  // ===== Multiplayer: start kola se sdílenými parametry =====
+  // ----- Multiplayer: start kola přes custom event -----
   useEffect(() => {
     const onMpRound = (e) => {
-      const { seed, tick: tk, speed: spd, maxTime } = e.detail || {};
+      const { seed, tick: tk, speed: spd, maxTime, startAt } = e.detail || {};
       if (!tk || !spd) return;
 
       const MAX = Number(maxTime || 12000);
@@ -257,9 +266,14 @@ export default function Game() {
       setDisplayValue(1.00);
       setElapsed(0);
       setResult(null);
-      setPhase("ready");
 
-      setTimeout(() => beginRunning(), 600);
+      if (startAt && startAt > Date.now()) {
+        // synchronní odpočet
+        startCountdown(Math.ceil((startAt - Date.now()) / 1000), startAt);
+      } else {
+        setPhase("ready");
+        setTimeout(() => startCountdown(3), 600); // krátký buffer + countdown
+      }
     };
 
     window.addEventListener("cg-mp-round", onMpRound);
@@ -267,7 +281,7 @@ export default function Game() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // ===== Start kola (solo) =====
+  // ----- Solo start kola -----
   const startRound = () => {
     const now = Date.now();
     if (resetAt && now >= resetAt) {
@@ -275,7 +289,7 @@ export default function Game() {
       setPlaysLeft(QUOTA_TOTAL); setResetAt(nextReset);
       localStorage.setItem(LS_QUOTA, JSON.stringify({ playsLeft: QUOTA_TOTAL, resetAt: nextReset }));
     }
-    if (playsLeft <= 0) { alert(t("alertQuota")); return; }
+    if (playsLeft <= 0) { alert(t("alertQuota") || "Vyčerpáno. Zkus znovu po resetu."); return; }
 
     const d = DIFFS[difficulty] || DIFFS.easy;
     const s = rand(d.speedMin, d.speedMax);
@@ -285,6 +299,7 @@ export default function Game() {
     const maxV = computeMaxReach(1.0, s, tk, MAX_TIME);
     setMaxReach(maxV);
 
+    // target v rozsahu 1..maxReach (víc adrenalinu)
     const todayKey = new Date().toISOString().slice(0, 10);
     const seededBetween = (min, max) => {
       const seed = Array.from(todayKey).reduce((a, ch) => a + ch.charCodeAt(0), 0);
@@ -295,16 +310,55 @@ export default function Game() {
       ? Math.max(1, Math.min(maxV, seededBetween(1.0, maxV)))
       : Number((1 + Math.random() * (maxV - 1)).toFixed(2));
 
-    mpMaxTimeRef.current = MAX_TIME; // solo režim
+    mpMaxTimeRef.current = MAX_TIME; // solo
 
     setTarget(tgt);
     setValue(1.00); setDisplayValue(1.00);
     setElapsed(0); setResult(null);
     setPhase("ready");
+
+    // kratičké okno na prohlédnutí parametrů + 3-2-1
+    setTimeout(() => startCountdown(3), 500);
   };
 
-  // ===== Ready → Running =====
+  // ----- Odpočet a start -----
+  const startCountdown = (seconds = 3, absoluteStartAtMs = null) => {
+    setPhase("countdown");
+    if (cdRef.current) clearInterval(cdRef.current);
+
+    if (absoluteStartAtMs) {
+      // synchronizace na přesný čas
+      const tickCd = () => {
+        const diff = Math.max(0, absoluteStartAtMs - Date.now());
+        const secs = Math.ceil(diff / 1000);
+        setCountdown(secs);
+        if (diff <= 0) {
+          clearInterval(cdRef.current);
+          beginRunning();
+        }
+      };
+      tickCd();
+      cdRef.current = setInterval(tickCd, 100);
+      return;
+    }
+
+    // lokální 3-2-1
+    setCountdown(seconds);
+    cdRef.current = setInterval(() => {
+      setCountdown((c) => {
+        if (c <= 1) {
+          clearInterval(cdRef.current);
+          beginRunning();
+          return 0;
+        }
+        return c - 1;
+      });
+    }, 1000);
+  };
+
+  // ----- Běh kola -----
   const beginRunning = () => {
+    // odečíst pokus
     setPlaysLeft((n) => {
       const next = Math.max(0, n - 1);
       localStorage.setItem(LS_QUOTA, JSON.stringify({ playsLeft: next, resetAt }));
@@ -315,24 +369,26 @@ export default function Game() {
     setPhase("running");
     const startedAt = performance.now();
 
+    // růst hodnoty
     growRef.current = setInterval(() => {
       const e = performance.now() - startedAt;
       const ramp = 1 + Math.min(e / 4000, RAMP_MAX_BOOST);
       setValue((v) => +(v + speed * ramp).toFixed(2));
     }, tick);
 
+    // časovač limitu
     elapsedRef.current = setInterval(() => {
       const e = performance.now() - startedAt;
       setElapsed(e);
       if (e >= mpMaxTimeRef.current) {
         clearInterval(growRef.current); clearInterval(elapsedRef.current);
-        const diff = Math.abs(value - target) + 0.15;
+        const diff = Math.abs(value - target) + 0.15; // penalizace při time-outu
         finishRound(diff);
       }
     }, 50);
   };
 
-  // ===== STOP =====
+  // ----- STOP (hráč trefuje) -----
   const stop = () => {
     if (phase !== "running") return;
     vibrate([20, 40, 20]); beep(420, 90, "sine");
@@ -341,7 +397,7 @@ export default function Game() {
     finishRound(diff);
   };
 
-  // Sdílení výsledku
+  // ----- Sdílení výsledku -----
   const shareResult = async (res) => {
     const text = `I hit ${value.toFixed(2)}x vs target ${target.toFixed(2)}x (err ${res.diff.toFixed(2)}) — score +${res.runPoints}. Try it: ${location.href}`;
     try {
@@ -352,18 +408,21 @@ export default function Game() {
     }
   };
 
-  // ===== Vyhodnocení =====
+  // ----- Vyhodnocení -----
   const finishRound = (diff) => {
     let runPoints = Math.max(0, Math.round(150 - diff * 300));
     let note = "OK";
 
     if (diff <= PERFECT_THR) {
-      runPoints += 100; note = t("resultNotePerfect"); setStreak((s) => s + 1);
+      runPoints += 100; note = t("resultNotePerfect") || "Perfect!";
+      setStreak((s) => s + 1);
       vibrate([30,60,30]); beep(900,150,"triangle"); setTimeout(()=>beep(1200,120,"triangle"),120);
     } else if (diff <= GOOD_THR) {
-      runPoints += 40; note = t("resultNoteGood"); setStreak((s) => s + 1); vibrate(30); beep(750,120,"sine");
+      runPoints += 40; note = t("resultNoteGood") || "Good";
+      setStreak((s) => s + 1); vibrate(30); beep(750,120,"sine");
     } else {
-      note = t("resultNoteMiss"); setStreak(0); beep(220,120,"sine");
+      note = t("resultNoteMiss") || "Miss";
+      setStreak(0); beep(220,120,"sine");
     }
 
     const futureStreak = diff <= GOOD_THR ? streak + 1 : 0;
@@ -382,13 +441,12 @@ export default function Game() {
     setPhase("done");
   };
 
-  // ===== Hotkeys =====
+  // ----- Hotkeys -----
   useEffect(() => {
     const onKey = (e) => {
       if (e.repeat) return;
       if (e.key === "Enter") {
         if (phase === "idle" || phase === "done") startRound();
-        else if (phase === "ready") beginRunning();
       }
       if (e.key === " ") {
         if (phase === "running") { e.preventDefault(); stop(); }
@@ -404,59 +462,64 @@ export default function Game() {
     return () => {
       clearInterval(growRef.current);
       clearInterval(elapsedRef.current);
+      clearInterval(cdRef.current);
       cancelAnimationFrame(rafRef.current);
     };
   }, []);
 
-  // ===== Lokalizované „pravidla“ =====
+  // ----- Lokalizované „pravidla“ -----
   const rules = i18n.language?.startsWith("cs")
     ? {
         title: "📜 Pravidla",
         goal: "Cíl: Zastav multiplikátor co nejblíže k cíli (např. 2.13x vs 2.15x).",
-        controls: "Ovládání: ⏎ Enter = Start/Confirm, Space = Stop. Nebo tlačítka Start/Stop.",
+        controls: "Ovládání: ⏎ Enter = Start, Space = Stop. Nebo tlačítka Start/Stop.",
         scoring: "Bodování: Čím menší chyba, tím více bodů. Perfect (≤ 0.02) dává bonus a zvyšuje streak.",
         tip: "Tip: Sleduj tempo růstu (base speed + ramp-up). Na Easy je růst pomalejší."
       }
     : {
         title: "📜 Rules",
         goal: "Goal: Stop the multiplier as close to the target as possible (e.g. 2.13x vs 2.15x).",
-        controls: "Controls: ⏎ Enter = Start/Confirm, Space = Stop. Or use Start/Stop buttons.",
-        scoring: "Scoring: The smaller the error, the more points. Perfect (≤ 0.02) adds a bonus and increases streak.",
+        controls: "Controls: ⏎ Enter = Start, Space = Stop. Or use the buttons.",
+        scoring: "Scoring: Smaller error = more points. Perfect (≤ 0.02) adds bonus and increases streak.",
         tip: "Tip: Watch growth pace (base speed + ramp-up). Easy grows slower."
       };
 
-  // ===== UI =====
+  /* =======================
+         R E N D E R
+     ======================= */
   return (
     <div className="grid gap-6">
-      {/* info karta */}
+      {/* Hlavní info */}
       <section className="rounded-2xl bg-white shadow-soft border border-neutral-200 p-6 dark:bg-slate-900 dark:border-slate-800">
         <div className="flex flex-col md:flex-row items-start md:items-center justify-between gap-4">
           <div>
             <h2 className="text-lg font-semibold tracking-tight">
-              {t("title", { x: `${target.toFixed(2)}x` })}
+              {t("title", { x: `${target.toFixed(2)}x` }) || `Aim for ${target.toFixed(2)}x`}
             </h2>
-            <p className="text-sm text-slate-500 dark:text-slate-400">{t("targetRange", { max: maxReach.toFixed(2) })}</p>
+            <p className="text-sm text-slate-500 dark:text-slate-400">
+              {t("targetRange", { max: maxReach.toFixed(2) }) || `Range: 1.00–${maxReach.toFixed(2)}x`}
+            </p>
           </div>
 
           <div className="flex items-center gap-6 text-sm">
             <div className="text-right">
-              <div>{t("points")}: <span className="font-semibold">{points}</span></div>
+              <div>{t("points") || "Points"}: <span className="font-semibold">{points}</span></div>
               <div>
-                {t("streak")}: <span className="font-semibold">{streak}</span>{" "}
+                {t("streak") || "Streak"}: <span className="font-semibold">{streak}</span>{" "}
                 <span className="text-slate-400"> (x{Math.min(1 + streak * STREAK_STEP, STREAK_CAP).toFixed(2)})</span>
               </div>
               <div className="text-slate-500 dark:text-slate-400">
-                {t("bestErr")}: {bestError === Infinity ? "-" : bestError.toFixed(2)}
+                {t("bestErr") || "Best err"}: {bestError === Infinity ? "-" : bestError.toFixed(2)}
               </div>
               <div className="text-slate-500 dark:text-slate-400">
-                {t("playsLeft")}: <span className="font-semibold">{playsLeft}</span>
-                {resetAt && <> • {t("resetIn", { time: fmtTime(resetAt - Date.now()) })}</>}
+                {t("playsLeft") || "Plays left"}: <span className="font-semibold">{playsLeft}</span>
+                {resetAt && <> • {(t("resetIn", { time: fmtTime(resetAt - Date.now()) }) || `reset in ${fmtTime(resetAt - Date.now())}`)}</>}
               </div>
             </div>
 
             <label className="flex items-center gap-2">
               <input type="checkbox" className="accent-emerald-600" checked={dailyMode} onChange={(e)=>setDailyMode(e.target.checked)} />
-              <span className="text-sm"> {t("daily")} </span>
+              <span className="text-sm">{t("daily") || "Daily seed"}</span>
             </label>
           </div>
         </div>
@@ -469,7 +532,7 @@ export default function Game() {
           {["easy","normal","hard"].map((d) => (
             <button
               key={d}
-              onClick={() => { setDifficulty(d); localStorage.setItem("cg_diff", d); }}
+              onClick={() => { setDifficulty(d); localStorage.setItem(LS.diff, d); }}
               className={`px-3 py-1.5 rounded-lg border transition ${
                 difficulty === d
                   ? "bg-emerald-500 text-white border-emerald-500"
@@ -482,21 +545,31 @@ export default function Game() {
         </div>
       </section>
 
-      {/* READY / PARAMETRY + tooltipy */}
-      {phase === "ready" ? (
-        <section className="rounded-2xl bg-white shadow-soft border border-neutral-200 p-6 dark:bg-slate-900 dark:border-slate-800">
-          <div className="text-center mb-4 text-xl font-semibold">{t("getReady")}</div>
-          <div className="grid grid-cols-2 md:grid-cols-6 gap-3 text-sm">
-            <Info label={t("target")} value={`${target.toFixed(2)}x`} hint={i18n.language?.startsWith("cs") ? "Požadovaná hodnota násobiče pro ideální zásah." : "Target multiplier for a perfect hit."} />
-            <Info label={t("range")} value={`1.00–${maxReach.toFixed(2)}x`} hint={i18n.language?.startsWith("cs") ? "Teoretický rozsah dosažitelný v tomto kole." : "Theoretical reachable range for this round."} />
-            <Info label={t("baseSpeed")} value={`${speed.toFixed(3)}/tick`} hint={i18n.language?.startsWith("cs") ? "Základní tempo růstu. Zrychluje se ramp-upem." : "Base growth pace, accelerates with ramp-up."} />
-            <Info label="Tick" value={`${tick}ms`} hint={i18n.language?.startsWith("cs") ? "Jak často se hodnota přepočítá. Vyšší = pomalejší." : "How often value updates. Higher = slower."} />
-            <Info label="Ramp-up" value={`+${Math.round(RAMP_MAX_BOOST*100)}%`} hint={i18n.language?.startsWith("cs") ? "Postupné zrychlování v průběhu kola." : "Gradual acceleration during the round."} />
-            <Info label={t("timeLimit")} value={`${(mpMaxTimeRef.current/1000).toFixed(0)}s`} hint={i18n.language?.startsWith("cs") ? "Po limitu se kolo ukončí s penalizací." : "After limit, the round ends with a penalty."} />
+      {/* READY / PARAMETRY + tooltipy + COUNTDOWN */}
+      {(phase === "ready" || phase === "countdown") ? (
+        <section className="rounded-2xl bg-white shadow-soft border border-neutral-200 p-6 text-center dark:bg-slate-900 dark:border-slate-800">
+          <div className="text-center mb-4 text-xl font-semibold">
+            {phase === "ready" ? (t("getReady") || "Get Ready") : (t("startingIn") || "Starting in")}{phase === "countdown" ? ` ${countdown}` : ""}
           </div>
+
+          <div className="grid grid-cols-2 md:grid-cols-6 gap-3 text-sm">
+            <Info label={t("target") || "Target"} value={`${target.toFixed(2)}x`}
+                  hint={i18n.language?.startsWith("cs") ? "Požadovaná hodnota násobiče pro ideální zásah." : "Target multiplier for a perfect hit."} />
+            <Info label={t("range") || "Range"} value={`1.00–${maxReach.toFixed(2)}x`}
+                  hint={i18n.language?.startsWith("cs") ? "Dosažitelný rozsah v tomto kole." : "Reachable range in this round."} />
+            <Info label={t("baseSpeed") || "Base speed"} value={`${speed.toFixed(3)}/tick`}
+                  hint={i18n.language?.startsWith("cs") ? "Základní tempo růstu. Zrychluje se ramp-upem." : "Base growth pace; ramp-up accelerates it."} />
+            <Info label="Tick" value={`${tick}ms`}
+                  hint={i18n.language?.startsWith("cs") ? "Jak často se hodnota přepočítá. Vyšší = pomalejší." : "How often value updates. Higher = slower."} />
+            <Info label="Ramp-up" value={`+${Math.round(RAMP_MAX_BOOST*100)}%`}
+                  hint={i18n.language?.startsWith("cs") ? "Postupné zrychlování v průběhu kola." : "Gradual acceleration."} />
+            <Info label={t("timeLimit") || "Time limit"} value={`${(mpMaxTimeRef.current/1000).toFixed(0)}s`}
+                  hint={i18n.language?.startsWith("cs") ? "Po limitu kolo skončí s penalizací." : "After limit, the round ends with a penalty."} />
+          </div>
+
           <div className="flex justify-center gap-3 mt-6">
-            <Primary onClick={beginRunning}>{t("startNow")}</Primary>
-            <Ghost onClick={() => setPhase("idle")}>{t("cancel")}</Ghost>
+            {phase === "ready" && <Primary onClick={() => startCountdown(3)}>{t("startNow") || "Start now"}</Primary>}
+            <Ghost onClick={() => setPhase("idle")}>{t("cancel") || "Cancel"}</Ghost>
           </div>
         </section>
       ) : (
@@ -509,7 +582,7 @@ export default function Game() {
             />
           </div>
 
-          {/* ZOBRAZENÁ HODNOTA (inertní) */}
+          {/* ZOBRAZENÁ HODNOTA */}
           <section className="rounded-2xl bg-white shadow-soft border border-neutral-200 p-10 text-center dark:bg-slate-900 dark:border-slate-800">
             <div className={`text-7xl font-extrabold tracking-tight ${phase === "running" ? "animate-pulse" : ""}`}>
               {displayValue.toFixed(2)}<span className="text-emerald-500">x</span>
@@ -518,8 +591,8 @@ export default function Game() {
 
           {/* OVLÁDÁNÍ */}
           <div className="flex justify-center gap-3">
-            {(phase === "idle" || phase === "done") && <Primary onClick={startRound}>{t("startRound")}</Primary>}
-            {phase === "running" && <Accent onClick={stop}>{t("stop")}</Accent>}
+            {(phase === "idle" || phase === "done") && <Primary onClick={startRound}>{t("startRound") || "Start round"}</Primary>}
+            {phase === "running" && <Accent onClick={stop}>{t("stop") || "Stop"}</Accent>}
           </div>
         </>
       )}
@@ -531,10 +604,10 @@ export default function Game() {
             value <span className="font-mono">{result.value.toFixed(2)}x</span> • error <span className="font-mono">{result.diff.toFixed(2)}</span>
           </div>
           <div className="mt-1 font-semibold">
-            {result.note} • +{result.runPoints} {t("points")} (streak x{result.streakMult.toFixed(2)})
+            {result.note} • +{result.runPoints} {t("points") || "points"} (streak x{result.streakMult.toFixed(2)})
           </div>
           <div className="mt-4 flex justify-center gap-3">
-            <Ghost onClick={startRound}>{t("startRound")}</Ghost>
+            <Ghost onClick={startRound}>{t("startRound") || "Start round"}</Ghost>
             <Ghost onClick={() => shareResult(result)}>Share</Ghost>
           </div>
         </section>
@@ -542,22 +615,26 @@ export default function Game() {
 
       {/* ŽEBŘÍČKY */}
       <div className="grid md:grid-cols-2 gap-6">
-        <Card title={t("topRuns")} empty={t("noRunsYet")}>
-          {topRuns.map((r, i) => (
-            <Row key={`rp_${i}`} left={`#${i+1} • tgt ${r.target.toFixed(2)} • val ${r.value.toFixed(2)}`} right={`+${r.runPoints} pts`} />
-          ))}
+        <Card title={t("topRuns") || "Top runs"} empty={t("noRunsYet") || "No runs yet"}>
+          <ol className="text-sm grid gap-1">
+            {topRuns.map((r, i) => (
+              <Row key={`rp_${i}`} left={`#${i+1} • tgt ${r.target.toFixed(2)} • val ${r.value.toFixed(2)}`} right={`+${r.runPoints} pts`} />
+            ))}
+          </ol>
         </Card>
-        <Card title={t("topPrecision")} empty={t("noRunsYet")}>
-          {topPrecision.map((r, i) => (
-            <Row key={`pr_${i}`} left={`#${i+1} • tgt ${r.target.toFixed(2)} • val ${r.value.toFixed(2)}`} right={`err ${r.diff.toFixed(2)}`} />
-          ))}
+        <Card title={t("topPrecision") || "Top precision"} empty={t("noRunsYet") || "No runs yet"}>
+          <ol className="text-sm grid gap-1">
+            {topPrecision.map((r, i) => (
+              <Row key={`pr_${i}`} left={`#${i+1} • tgt ${r.target.toFixed(2)} • val ${r.value.toFixed(2)}`} right={`err ${r.diff.toFixed(2)}`} />
+            ))}
+          </ol>
         </Card>
       </div>
 
       {/* HISTORIE */}
       {history.length > 0 && (
         <section className="rounded-2xl bg-white shadow-soft border border-neutral-200 p-6 dark:bg-slate-900 dark:border-slate-800">
-          <div className="font-semibold mb-3">{t("recentRuns")}</div>
+          <div className="font-semibold mb-3">{t("recentRuns") || "Recent runs"}</div>
           <ul className="text-xs text-slate-600 dark:text-slate-300 grid gap-1 max-h-40 overflow-auto pr-1">
             {history.map((r, i) => (
               <li key={r.ts + "_" + i} className="flex justify-between">
@@ -569,7 +646,7 @@ export default function Game() {
         </section>
       )}
 
-      {/* PRAVIDLA – sticky spodní panel */}
+      {/* PRAVIDLA – sticky panel */}
       <div className="sticky bottom-3 z-40">
         <section className="mx-auto max-w-3xl rounded-2xl bg-white shadow-soft border border-neutral-200 p-4 dark:bg-slate-900 dark:border-slate-800">
           <div className="text-sm font-semibold mb-1">{rules.title}</div>

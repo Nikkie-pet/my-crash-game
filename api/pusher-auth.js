@@ -1,19 +1,63 @@
+// api/pusher-auth.js
+import Pusher from "pusher";
+
+function send(res, code, data) {
+  res.statusCode = code;
+  res.setHeader("Content-Type", "application/json; charset=utf-8");
+  res.end(JSON.stringify(data));
+}
+
+async function parseBody(req) {
+  const ct = (req.headers["content-type"] || "").toLowerCase();
+  const raw = await new Promise((resolve, reject) => {
+    let data = "";
+    req.on("data", (c) => (data += c));
+    req.on("end", () => resolve(data));
+    req.on("error", reject);
+  });
+
+  if (ct.includes("application/json")) {
+    try { return JSON.parse(raw || "{}"); } catch { return {}; }
+  }
+  if (ct.includes("application/x-www-form-urlencoded")) {
+    const obj = {};
+    for (const kv of raw.split("&")) {
+      if (!kv) continue;
+      const [k, v] = kv.split("=");
+      obj[decodeURIComponent(k)] = decodeURIComponent((v || "").replace(/\+/g, " "));
+    }
+    return obj;
+  }
+  return {};
+}
+
 export default async function handler(req, res) {
   if (req.method !== "POST") {
     res.setHeader("Allow", "POST");
     return send(res, 405, { error: "Method not allowed" });
   }
 
+  // --- kontrola ENV (neprozrazujeme hodnoty) ---
+  const envOk = {
+    appId: !!process.env.PUSHER_APP_ID,
+    key: !!process.env.PUSHER_KEY,
+    secret: !!process.env.PUSHER_SECRET,
+    cluster: !!process.env.PUSHER_CLUSTER,
+  };
+  if (!envOk.appId || !envOk.key || !envOk.secret || !envOk.cluster) {
+    return send(res, 500, { error: "Missing PUSHER_* env", envOk });
+  }
+
+  const pusher = new Pusher({
+    appId: process.env.PUSHER_APP_ID,
+    key: process.env.PUSHER_KEY,
+    secret: process.env.PUSHER_SECRET,
+    cluster: process.env.PUSHER_CLUSTER,
+    useTLS: true,
+  });
+
   try {
     const body = await parseBody(req);
-    console.log("Auth body:", body);   // 👈 DEBUG
-    console.log("ENV check:", {
-      id: process.env.PUSHER_APP_ID,
-      key: process.env.PUSHER_KEY,
-      secret: process.env.PUSHER_SECRET ? "OK" : "MISSING",
-      cluster: process.env.PUSHER_CLUSTER,
-    });
-
     const socketId = body.socket_id || body.socketId;
     const channelName = body.channel_name || body.channelName;
     const username = (body.username || "player").toString().slice(0, 24);
@@ -28,10 +72,8 @@ export default async function handler(req, res) {
     };
 
     const auth = pusher.authorizeChannel(socketId, channelName, presenceData);
-    console.log("Auth response:", auth); // 👈 DEBUG
     return send(res, 200, auth);
   } catch (e) {
-    console.error("Auth error:", e); // 👈 DEBUG
     return send(res, 500, { error: "Auth failed", detail: e?.message || String(e) });
   }
 }
