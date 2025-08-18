@@ -2,7 +2,7 @@
 import Pusher from "pusher";
 
 function setCors(res) {
-  // pro debug povolíme všechny origins; až to pojede, klidně zúžíme
+  // pro vývoj klidně povolíme všechny originy; až bude hotovo, můžeš zúžit
   res.setHeader("Access-Control-Allow-Origin", "*");
   res.setHeader("Access-Control-Allow-Methods", "POST, OPTIONS");
   res.setHeader("Access-Control-Allow-Headers", "Content-Type");
@@ -42,7 +42,7 @@ export default async function handler(req, res) {
     return send(res, 405, { error: "Method not allowed" });
   }
 
-  // ENV sanity
+  // ENV kontrola
   const envOk = {
     appId: !!process.env.PUSHER_APP_ID,
     key: !!process.env.PUSHER_KEY,
