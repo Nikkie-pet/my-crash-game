@@ -18,10 +18,15 @@ function Btn({ children, className = "", ...props }) {
 }
 
 export default function Multiplayer() {
-  const [username, setUsername] = useState(() => (localStorage.getItem("mp_name") || "Player").trim());
-  const [room, setRoom] = useState(() =>
-    (localStorage.getItem("mp_room") || "").toLowerCase().replace(/[^a-z0-9\-]/g, "")
+  const [username, setUsername] = useState(() =>
+    (localStorage.getItem("mp_name") || "Player").trim()
   );
+  const [room, setRoom] = useState(() =>
+    (localStorage.getItem("mp_room") || "")
+      .toLowerCase()
+      .replace(/[^a-z0-9\-]/g, "")
+  );
+
   const [joined, setJoined] = useState(false);
   const [joining, setJoining] = useState(false);
   const [error, setError] = useState("");
@@ -31,7 +36,7 @@ export default function Multiplayer() {
   const [subscribed, setSubscribed] = useState(false);
 
   // READY stav
-  const [readyNames, setReadyNames] = useState([]); // kdo je READY (jména)
+  const [readyNames, setReadyNames] = useState([]); // seznam jmen hráčů, kteří jsou READY
   const [iAmReady, setIAmReady] = useState(false);
 
   const [lastRoundId, setLastRoundId] = useState(null);
@@ -39,19 +44,32 @@ export default function Multiplayer() {
 
   const lockUntilRef = useRef(0);
 
-  // Debug režim (umožní „Debug start“ i s 1 hráčem): ?debug=1
+  // Debug režim (umožní start i když nejsou splněny podmínky): ?debug=1
   const debugMode = useMemo(() => {
-    try { return new URLSearchParams(window.location.search).get("debug") === "1"; }
-    catch { return false; }
+    try {
+      return new URLSearchParams(window.location.search).get("debug") === "1";
+    } catch {
+      return false;
+    }
   }, []);
 
-  // host jméno (z "members" pro UI)
-  const hostName = useMemo(() => (members.length ? [...members].sort()[0] : null), [members]);
+  // host (pro UI z lokálního seznamu členů)
+  const hostName = useMemo(
+    () => (members.length ? [...members].sort()[0] : null),
+    [members]
+  );
   const isHost = useMemo(() => !!hostName && hostName === username, [hostName, username]);
 
-  useEffect(() => () => { try { pusher?.disconnect(); } catch {} }, [pusher]);
+  // cleanup Pusher při unmountu
+  useEffect(() => {
+    return () => {
+      try {
+        pusher?.disconnect();
+      } catch {}
+    };
+  }, [pusher]);
 
-  // poslouchej výsledky z Game → broadcast do room + lokální tabulka
+  // poslouchej výsledky ze hry → lokální tabulka + broadcast do room
   useEffect(() => {
     const onGameResult = (e) => {
       const result = e.detail || {};
@@ -60,8 +78,11 @@ export default function Multiplayer() {
         const filtered = (prev || []).filter((r) => r.name !== result.name);
         return [...filtered, result].sort((a, b) => b.score - a.score);
       });
+
       if (channel) {
-        try { channel.trigger("client-round-result", result); } catch (err) {
+        try {
+          channel.trigger("client-round-result", result);
+        } catch (err) {
           console.warn("client-round-result trigger failed:", err);
         }
       }
@@ -76,8 +97,14 @@ export default function Multiplayer() {
     const cleanName = username.replace(/\s+/g, " ").trim();
     const cleanRoom = room.toLowerCase().replace(/[^a-z0-9\-]/g, "");
 
-    if (!cleanRoom) { setError("Zadej název místnosti."); return; }
-    if (!cleanName) { setError("Zadej jméno."); return; }
+    if (!cleanRoom) {
+      setError("Zadej název místnosti.");
+      return;
+    }
+    if (!cleanName) {
+      setError("Zadej jméno.");
+      return;
+    }
 
     const key = import.meta.env.VITE_PUSHER_KEY;
     const cluster = import.meta.env.VITE_PUSHER_CLUSTER;
@@ -103,13 +130,21 @@ export default function Multiplayer() {
         mems.each((m) => list.push((m.info?.name || "player").trim()));
         if (!list.includes(cleanName)) list.push(cleanName);
         setMembers(list);
-        setReadyNames([]); // po připojení nikdo není ready
+
+        // po připojení: nikdo není READY
+        setReadyNames([]);
         setIAmReady(false);
+
         setJoined(true);
         setSubscribed(true);
         setJoining(false);
         setChannel(ch);
-        try { window.__mp = { pusher: p, channel: ch, room: cleanRoom }; } catch {}
+
+        // pro konzolový debug
+        try {
+          window.__mp = { pusher: p, channel: ch, room: cleanRoom };
+        } catch {}
+
         console.log("[MP] subscription_succeeded →", list);
         toast(`Připojeno do místnosti ${cleanRoom}`, "success");
       });
@@ -140,7 +175,7 @@ export default function Multiplayer() {
         toast("Pusher error", "error");
       });
 
-      // READY sync
+      // READY synchronizace od ostatních
       ch.bind("client-ready", (payload) => {
         const { name, ready } = payload || {};
         setReadyNames((prev) => {
@@ -151,21 +186,30 @@ export default function Multiplayer() {
         });
       });
 
-      // start kola (přijmout pouze od aktuálního hosta)
+      // start kola (přijmout pouze od aktuálního hosta podle realtime seznamu)
       ch.bind("client-round-start", (payload) => {
         try {
           const currentMembers = [];
-          ch.members.each((m) => currentMembers.push((m.info?.name || "player").trim()));
+          ch.members.each((m) =>
+            currentMembers.push((m.info?.name || "player").trim())
+          );
           const currentHost = currentMembers.sort()[0];
-          console.log("[MP] incoming round-start from", payload?.from, "| currentHost:", currentHost);
+          console.log(
+            "[MP] incoming round-start from",
+            payload?.from,
+            "| currentHost:",
+            currentHost
+          );
 
           if (payload?.from !== currentHost) {
             console.warn("[MP] Ignoring round-start from non-host");
             return;
           }
-          // Po startu reset READY
+
+          // po startu reset READY
           setReadyNames([]);
           setIAmReady(false);
+
           setLastRoundId(payload.seed || payload.startAt || Date.now());
           setLastResults([]);
           window.dispatchEvent(new CustomEvent("cg-mp-round", { detail: payload }));
@@ -176,13 +220,14 @@ export default function Multiplayer() {
 
       // výsledky od ostatních
       ch.bind("client-round-result", (result) => {
-        setLastRoundId((prev) => prev ?? result.roundId ?? result.ts ?? Date.now());
+        setLastRoundId(
+          (prev) => prev ?? result.roundId ?? result.ts ?? Date.now()
+        );
         setLastResults((prev) => {
           const filtered = (prev || []).filter((r) => r.name !== result.name);
           return [...filtered, result].sort((a, b) => b.score - a.score);
         });
       });
-
     } catch (e) {
       console.error("[MP] createPusher failed", e);
       const msg = e?.message || String(e);
@@ -193,7 +238,10 @@ export default function Multiplayer() {
   };
 
   const leaveRoom = () => {
-    try { pusher?.unsubscribe(`presence-${room}`); pusher?.disconnect(); } catch {}
+    try {
+      pusher?.unsubscribe(`presence-${room}`);
+      pusher?.disconnect();
+    } catch {}
     setJoined(false);
     setJoining(false);
     setSubscribed(false);
@@ -204,26 +252,38 @@ export default function Multiplayer() {
     setPusher(null);
     setError("");
     setLastResults([]);
-    try { delete window.__mp; } catch {}
+    try {
+      delete window.__mp;
+    } catch {}
   };
 
+  // ✅ FIX: odesílatel si ihned upraví svůj READY stav lokálně
   const toggleReady = () => {
     if (!channel) return;
     const next = !iAmReady;
     setIAmReady(next);
+
+    setReadyNames((prev) => {
+      const has = prev.includes(username);
+      if (next && !has) return [...prev, username];
+      if (!next && has) return prev.filter((n) => n !== username);
+      return prev;
+    });
+
     channel.trigger("client-ready", { name: username, ready: next });
     if (next) toast("Připraven/a ✅", "success");
   };
 
-  // pomocná funkce: aktuální seznam členů z channelu
+  // realtime členové z channelu (nejaktuálnější zdroj)
   const getRealtimeMembers = () => {
     const arr = [];
-    try { channel?.members?.each((m) => arr.push((m.info?.name || "player").trim())); } catch {}
+    try {
+      channel?.members?.each((m) => arr.push((m.info?.name || "player").trim()));
+    } catch {}
     return arr;
-    // když by nebyl channel.members, spadne to do []
   };
 
-  // ověř, že VŠICHNI realtime členové jsou v readyNames
+  // jsou všichni aktuální členové READY?
   const areAllRealtimeReady = () => {
     const rt = getRealtimeMembers();
     if (rt.length < 2) return false;
@@ -231,19 +291,37 @@ export default function Multiplayer() {
   };
 
   const startSynchronizedRound = () => {
-    if (!channel) { setError("Channel není připraven."); toast("Channel není připraven", "error"); return; }
-    if (!subscribed) { setError("Ještě nejsi plně připojen/á (subscription)."); toast("Čekám na subscription…", "error"); return; }
+    if (!channel) {
+      setError("Channel není připraven.");
+      toast("Channel není připraven", "error");
+      return;
+    }
+    if (!subscribed) {
+      setError("Ještě nejsi plně připojen/á (subscription).");
+      toast("Čekám na subscription…", "error");
+      return;
+    }
 
-    // ověř hosta a počet hráčů z realtime members
     const currentMembers = getRealtimeMembers();
     const currentHost = currentMembers.slice().sort()[0];
 
-    if (currentHost !== username) { setError(`Start může spustit pouze hostitel (${currentHost || "—"}).`); toast("Nejsi hostitel", "error"); return; }
-    if (currentMembers.length < 2 && !debugMode) { setError("Start je možný až od 2 hráčů v místnosti."); toast("Potřeba min. 2 hráči", "error"); return; }
+    if (currentHost !== username) {
+      setError(`Start může spustit pouze hostitel (${currentHost || "—"}).`);
+      toast("Nejsi hostitel", "error");
+      return;
+    }
+    if (currentMembers.length < 2 && !debugMode) {
+      setError("Start je možný až od 2 hráčů v místnosti.");
+      toast("Potřeba min. 2 hráči", "error");
+      return;
+    }
 
-    // READY kontrola na realtime členech
     const everyoneReady = areAllRealtimeReady();
-    if (!everyoneReady && !debugMode) { setError("Start až když jsou všichni READY."); toast("Všichni musí být READY", "error"); return; }
+    if (!everyoneReady && !debugMode) {
+      setError("Start až když jsou všichni READY.");
+      toast("Všichni musí být READY", "error");
+      return;
+    }
 
     if (Date.now() < lockUntilRef.current) return;
 
@@ -275,10 +353,11 @@ export default function Multiplayer() {
     window.dispatchEvent(new CustomEvent("cg-mp-round", { detail: payload }));
   };
 
-  // běžná podmínka pro tlačítko Start
-  const canStart = joined && subscribed && members.length >= 2 && isHost && areAllRealtimeReady();
+  // podmínky pro povolení tlačítka Start
+  const canStart =
+    joined && subscribed && members.length >= 2 && isHost && areAllRealtimeReady();
 
-  // hinty
+  // textová nápověda, proč nejde startnout
   let startHint = "";
   if (!joined) startHint = "Nejsi připojen/á v místnosti.";
   else if (!subscribed) startHint = "Čekám na dokončení připojení…";
@@ -297,7 +376,9 @@ export default function Multiplayer() {
             <input
               className="px-3 py-2 rounded-lg border border-neutral-300 dark:bg-slate-900 dark:border-slate-700"
               value={username}
-              onChange={(e) => setUsername(e.target.value.replace(/\s+/g, " ").trim().slice(0, 24))}
+              onChange={(e) =>
+                setUsername(e.target.value.replace(/\s+/g, " ").trim().slice(0, 24))
+              }
               placeholder="Tvoje přezdívka"
             />
           </div>
@@ -307,7 +388,11 @@ export default function Multiplayer() {
             <input
               className="px-3 py-2 rounded-lg border border-neutral-300 dark:bg-slate-900 dark:border-slate-700"
               value={room}
-              onChange={(e) => setRoom(e.target.value.toLowerCase().replace(/[^a-z0-9\-]/g, "").slice(0, 24))}
+              onChange={(e) =>
+                setRoom(
+                  e.target.value.toLowerCase().replace(/[^a-z0-9\-]/g, "").slice(0, 24)
+                )
+              }
               placeholder="např. friends-123"
             />
           </div>
@@ -334,11 +419,17 @@ export default function Multiplayer() {
                 Hostitel: <strong>{hostName || "—"}</strong>
               </div>
               <div className="text-xs text-slate-500 mt-1">
-                Players: {members.length} · Ready: {readyNames.length}/{members.length} · isHost:{String(isHost)}
+                Players: {members.length} · Ready: {readyNames.length}/{members.length} · isHost:
+                {String(isHost)}
               </div>
             </div>
             <div className="flex items-center gap-2">
-              <Btn onClick={toggleReady} className={iAmReady ? "bg-emerald-500 text-white border-emerald-500" : ""}>
+              <Btn
+                onClick={toggleReady}
+                className={
+                  iAmReady ? "bg-emerald-500 text-white border-emerald-500" : ""
+                }
+              >
                 {iAmReady ? "✓ READY" : "I'm ready"}
               </Btn>
               <Btn
@@ -349,7 +440,7 @@ export default function Multiplayer() {
                 Start round (host)
               </Btn>
               {debugMode && (
-                <Btn onClick={startSynchronizedRound} className="border-amber-400 bg-amber-50 dark:bg-amber-900/20">
+                <Btn className="border-amber-400 bg-amber-50 dark:bg-amber-900/20" onClick={startSynchronizedRound}>
                   Debug start (host)
                 </Btn>
               )}
@@ -373,18 +464,21 @@ export default function Multiplayer() {
                         : "bg-neutral-100 dark:bg-slate-800 border-neutral-200 dark:border-slate-700"
                     }`}
                   >
-                    {m}{rdy ? " ✓" : ""}
+                    {m}
+                    {rdy ? " ✓" : ""}
                   </span>
                 );
               })}
             </div>
           </div>
 
-          {/* Last round results */}
+          {/* Poslední kolo */}
           <div className="mt-6">
             <div className="flex items-baseline justify-between">
               <h3 className="font-semibold">Last round</h3>
-              <div className="text-xs text-slate-500">{lastRoundId ? `#${lastRoundId}` : "—"}</div>
+              <div className="text-xs text-slate-500">
+                {lastRoundId ? `#${lastRoundId}` : "—"}
+              </div>
             </div>
             {lastResults.length ? (
               <div className="mt-2 overflow-x-auto">
@@ -399,7 +493,10 @@ export default function Multiplayer() {
                   </thead>
                   <tbody>
                     {lastResults.map((r, idx) => (
-                      <tr key={idx} className="border-t border-neutral-200 dark:border-slate-800">
+                      <tr
+                        key={idx}
+                        className="border-t border-neutral-200 dark:border-slate-800"
+                      >
                         <td className="py-1 pr-4">{r.name}</td>
                         <td className="py-1 pr-4 font-semibold">{r.score}</td>
                         <td className="py-1 pr-4">{Number(r.value).toFixed(2)}×</td>
@@ -410,11 +507,15 @@ export default function Multiplayer() {
                 </table>
               </div>
             ) : (
-              <div className="text-xs text-slate-500 mt-2">Zatím žádné výsledky pro aktuální kolo.</div>
+              <div className="text-xs text-slate-500 mt-2">
+                Zatím žádné výsledky pro aktuální kolo.
+              </div>
             )}
           </div>
 
-          {error && <p className="mt-3 text-sm text-red-600 dark:text-red-400">{error}</p>}
+          {error && (
+            <p className="mt-3 text-sm text-red-600 dark:text-red-400">{error}</p>
+          )}
         </>
       )}
     </section>
