@@ -8,11 +8,13 @@ export default function Game() {
   const [running, setRunning] = useState(false);
   const [value, setValue] = useState(1.0);       // aktuální hodnota (×)
   const [target, setTarget] = useState(1.5);     // cíl (×) – v MP přichází z payloadu
-  const [tick, setTick] = useState(30);          // FPS (pouze informativní)
-  const [speed, setSpeed] = useState(0.04);      // tempo růstu
+  const [speed, setSpeed] = useState(0.04);      // tempo růstu (vizuální parametr)
   const [maxTime, setMaxTime] = useState(12000); // ms
   const [countdown, setCountdown] = useState(0); // ms do startu (sync v MP)
   const [roundId, setRoundId] = useState(null);
+
+  // Vizualizace průběhu času 0..1
+  const [progress, setProgress] = useState(0);
 
   const mutedRef = useRef(localStorage.getItem("muted") === "1");
   const rafRef = useRef(null);
@@ -32,17 +34,16 @@ export default function Game() {
     const onRound = (e) => {
       const p = e.detail || {};
       const t = Number(p.target ?? 1.5);
-      const tk = Number(p.tick ?? 30);
       const sp = Number(p.speed ?? 0.04);
       const mt = Number(p.maxTime ?? 12000);
       const sa = Number(p.startAt ?? Date.now() + 2000);
 
       // nastavení parametrů
       setTarget(clamp(t, 1.0, 999));
-      setTick(clamp(tk, 10, 120));
       setSpeed(clamp(sp, 0.005, 0.2));
       setMaxTime(clamp(mt, 3000, 60000));
       setValue(1.0);
+      setProgress(0);
       setRunning(false);
       setRoundId(p.seed || sa);
 
@@ -79,7 +80,6 @@ export default function Game() {
   const beep = (secLeft) => {
     if (mutedRef.current) return;
     try {
-      // jemné „píp“ pro 3,2,1. Pro 0 ne, to je start.
       if (secLeft > 0) {
         new Audio(
           "data:audio/wav;base64,UklGRiQAAABXQVZFZm10IBAAAAABAAEAESsAACJWAAACABAAZGF0YQAAAAA="
@@ -98,16 +98,16 @@ export default function Game() {
         startRun();
       }
     };
-    // hned spočítej stav a pak po 100ms
     tickFn();
     countdownTimerRef.current = setInterval(tickFn, 100);
   };
 
   const startRun = () => {
     setValue(1.0);
+    setProgress(0);
     setRunning(true);
     startTimeRef.current = Date.now();
-    loop();
+    rafRef.current = requestAnimationFrame(loop);
   };
 
   const stopRun = () => {
@@ -120,14 +120,17 @@ export default function Game() {
     if (!running) return;
     const elapsed = Date.now() - startTimeRef.current;
 
-    // jednoduchý růst – lineární vizuální tempo řízené `speed`
+    // Vizualizace času: 0..1
+    const p = clamp(elapsed / maxTime, 0, 1);
+    setProgress(p);
+
+    // Vizuální růst hodnoty (jednoduchá lineární křivka vůči času a "speed")
     const next = 1.0 + (elapsed / (1000 / speed));
     setValue(next);
 
     if (elapsed >= maxTime) {
-      // „crash“ – konec kola bez kliknutí
       setRunning(false);
-      reportResult(true);
+      reportResult(true); // „crash“ – bez kliknutí
       return;
     }
     rafRef.current = requestAnimationFrame(loop);
@@ -136,15 +139,15 @@ export default function Game() {
   const handleClick = () => {
     if (countdown > 0) return; // během odpočtu nelze startovat
     if (!running) {
-      // SOLO režim: nastavíme 3s odpočet a start
+      // SOLO režim: nastavíme společně s odpočtem
       const soloTarget = Number((1.10 + Math.random() * (5.0 - 1.10)).toFixed(2));
       const sa = Date.now() + 3000;
       setTarget(soloTarget);
-      setTick(30);
       setSpeed(0.04);
       setMaxTime(12000);
       setRoundId(Date.now());
       setValue(1.0);
+      setProgress(0);
       beginCountdownTo(sa);
       toast(`Solo kolo – cíl ${soloTarget.toFixed(2)}×`, "info");
     } else {
@@ -162,7 +165,7 @@ export default function Game() {
     const payload = {
       name,
       value: v,
-      target: t, // posíláme přesně ten target, který všichni viděli
+      target: t, // přesně ten target, který všichni viděli
       score,
       crashed: !!crashed,
       ts: Date.now(),
@@ -185,6 +188,11 @@ export default function Game() {
   const secondsLabel =
     countdown > 0 ? `Start za ${(countdown / 1000).toFixed(1)} s` : running ? "Běží…" : "Připraveno";
 
+  // pro vykreslení „target markeru“ v rámci hodnotové osy
+  // odhad horního limitu osy: 1.0 → hodnota při maxTime s aktuální speed
+  const estimatedMaxValue = 1.0 + (maxTime / (1000 / speed));
+  const targetPos = clamp((target - 1.0) / (estimatedMaxValue - 1.0), 0, 1);
+
   return (
     <section className="relative rounded-2xl bg-white shadow-soft border border-neutral-200 p-6 dark:bg-slate-900 dark:border-slate-800 overflow-hidden">
       {/* Velký 3·2·1 overlay */}
@@ -196,26 +204,50 @@ export default function Game() {
         </div>
       )}
 
+      {/* Header */}
       <div className="flex items-center justify-between">
         <h2 className="text-lg font-semibold">Crash Aim</h2>
         <div className="text-sm text-slate-500">{secondsLabel}</div>
       </div>
 
-      <div className="mt-4 grid gap-3 md:grid-cols-4">
-        <Field label="Cíl (×)">
-          <strong className="text-2xl">{target.toFixed(2)}</strong>
-        </Field>
-        <Field label="Hodnota (×)">
-          <span className="text-xl">{value.toFixed(2)}</span>
-        </Field>
-        <Field label="Rychlost">
-          <span className="text-sm">{speed}</span>
-        </Field>
-        <Field label="FPS">
-          <span className="text-sm">{tick}</span>
-        </Field>
+      {/* Velká „živá“ hodnota */}
+      <div className="mt-4 flex items-end gap-4">
+        <div className="text-5xl md:text-6xl font-extrabold tabular-nums tracking-tight">
+          {value.toFixed(2)}×
+        </div>
+        <div className="text-slate-500">
+          <div className="text-xs">Cíl</div>
+          <div className="text-xl font-semibold">{target.toFixed(2)}×</div>
+        </div>
       </div>
 
+      {/* Hodnotová osa s markerem cíle */}
+      <div className="relative mt-5 h-4 rounded-full bg-neutral-100 dark:bg-slate-800 border border-neutral-200 dark:border-slate-700 overflow-hidden">
+        {/* „Spark“ – tečka ukazující průběh času (0..1) */}
+        <div
+          className="absolute top-0 bottom-0 w-0.5 bg-emerald-500 transition-[left] duration-100"
+          style={{ left: `${progress * 100}%` }}
+        />
+        {/* cíl – svislý marker */}
+        <div
+          className="absolute top-0 bottom-0 w-[2px] bg-amber-500/80"
+          style={{ left: `${targetPos * 100}%` }}
+          title={`Cíl ${target.toFixed(2)}×`}
+        />
+        {/* jemná výplň za sparkem */}
+        <div
+          className="absolute inset-y-0 left-0 bg-emerald-200/40 dark:bg-emerald-900/30 transition-[width] duration-100"
+          style={{ width: `${progress * 100}%` }}
+        />
+      </div>
+
+      {/* Osa popisky */}
+      <div className="mt-2 flex justify-between text-xs text-slate-500 tabular-nums">
+        <span>1.00×</span>
+        <span>{estimatedMaxValue.toFixed(2)}×</span>
+      </div>
+
+      {/* Ovládací tlačítko */}
       <div className="mt-6">
         <button
           onClick={handleClick}
@@ -228,17 +260,9 @@ export default function Game() {
       </div>
 
       <p className="text-xs text-slate-500 mt-4">
-        Space / Enter – Start/Stop. Cílem je trefit se co nejblíž hodnotě „Cíl“.
+        Space / Enter – Start/Stop. Sleduj horní velkou hodnotu (×), časová lišta ukazuje průběh kola.
+        Svislá oranžová čára je cílová hodnota. Tref se co nejblíž cíli!
       </p>
     </section>
-  );
-}
-
-function Field({ label, children }) {
-  return (
-    <div className="p-3 rounded-xl bg-neutral-50 dark:bg-slate-800/50 border border-neutral-200 dark:border-slate-700">
-      <div className="text-xs text-slate-500 mb-1">{label}</div>
-      {children}
-    </div>
   );
 }
