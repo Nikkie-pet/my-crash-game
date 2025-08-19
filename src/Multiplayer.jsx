@@ -1,5 +1,5 @@
 // src/Multiplayer.jsx
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import { createPusher } from "./realtime/pusherClient";
 
 function Btn({ children, className = "", ...props }) {
@@ -17,111 +17,190 @@ function Btn({ children, className = "", ...props }) {
 }
 
 export default function Multiplayer() {
-  const [username, setUsername] = useState(() => localStorage.getItem("mp_name") || "Player");
-  const [room, setRoom] = useState(() => localStorage.getItem("mp_room") || "");
+  const [username, setUsername] = useState(() => (localStorage.getItem("mp_name") || "Player").trim());
+  const [room, setRoom] = useState(() => (localStorage.getItem("mp_room") || "").toLowerCase().replace(/[^a-z0-9\-]/g, ""));
   const [joined, setJoined] = useState(false);
   const [joining, setJoining] = useState(false);
   const [error, setError] = useState("");
   const [members, setMembers] = useState([]);
   const [channel, setChannel] = useState(null);
   const [pusher, setPusher] = useState(null);
-  const isHost = useMemo(() => {
-    if (!joined || !members.length) return false;
-    const first = [...members].sort()[0];
-    return first === username;
-  }, [joined, members, username]);
 
+  const [lastRoundId, setLastRoundId] = useState(null);
+  const [lastResults, setLastResults] = useState([]);
+
+  const lockUntilRef = useRef(0);
+
+  // host = abecedně první jméno
+  const hostName = useMemo(() => (members.length ? [...members].sort()[0] : null), [members]);
+  const isHost = useMemo(() => !!hostName && hostName === username, [hostName, username]);
+
+  useEffect(() => () => { try { pusher?.disconnect(); } catch {} }, [pusher]);
+
+  // výsledky z Game → tabulka + broadcast do room
   useEffect(() => {
-    return () => { try { pusher?.disconnect(); } catch {} };
-  }, [pusher]);
+    const onGameResult = (e) => {
+      const result = e.detail || {};
+      setLastRoundId(result.roundId || result.ts || Date.now());
+      setLastResults((prev) => {
+        const filtered = (prev || []).filter((r) => r.name !== result.name);
+        return [...filtered, result].sort((a, b) => b.score - a.score);
+      });
+      if (channel) {
+        try { channel.trigger("client-round-result", result); } catch {}
+      }
+    };
+    window.addEventListener("cg-game-result", onGameResult);
+    return () => window.removeEventListener("cg-game-result", onGameResult);
+  }, [channel]);
 
   const joinRoom = async () => {
     setError("");
-    if (!room.trim()) { setError("Zadej název místnosti."); return; }
+
+    const cleanName = username.trim();
+    const cleanRoom = room.toLowerCase().replace(/[^a-z0-9\-]/g, "");
+
+    if (!cleanRoom) {
+      setError("Zadej název místnosti.");
+      return;
+    }
+    if (!cleanName) {
+      setError("Zadej jméno.");
+      return;
+    }
 
     const key = import.meta.env.VITE_PUSHER_KEY;
     const cluster = import.meta.env.VITE_PUSHER_CLUSTER;
-    if (!key || !cluster) { setError("Chybí VITE_PUSHER_KEY / VITE_PUSHER_CLUSTER."); return; }
+    if (!key || !cluster) {
+      setError("Chybí VITE_PUSHER_KEY / VITE_PUSHER_CLUSTER (zkontroluj ENV na Vercelu).");
+      return;
+    }
 
     setJoining(true);
-    localStorage.setItem("mp_name", username);
-    localStorage.setItem("mp_room", room);
+    localStorage.setItem("mp_name", cleanName);
+    localStorage.setItem("mp_room", cleanRoom);
+    setUsername(cleanName);
+    setRoom(cleanRoom);
 
     try {
-      const p = createPusher(username);
+      const p = createPusher(cleanName);
       setPusher(p);
 
-      const ch = p.subscribe(`presence-${room}`);
+      const ch = p.subscribe(`presence-${cleanRoom}`);
 
       ch.bind("pusher:subscription_succeeded", (mems) => {
         const list = [];
-        mems.each((m) => list.push(m.info?.name || "player"));
+        mems.each((m) => list.push((m.info?.name || "player").trim()));
+        if (!list.includes(cleanName)) list.push(cleanName);
         setMembers(list);
         setJoined(true);
         setJoining(false);
-        console.log("[MP] subscription_succeeded → members:", list);
+        setError("");
+        console.log("[MP] subscription_succeeded →", list);
       });
 
       ch.bind("pusher:member_added", (member) => {
-        const name = member.info?.name || "player";
-        setMembers((prev) => [...prev, name]);
+        const name = (member.info?.name || "player").trim();
+        setMembers((prev) => (prev.includes(name) ? prev : [...prev, name]));
       });
 
       ch.bind("pusher:member_removed", (member) => {
-        const name = member.info?.name || "player";
+        const name = (member.info?.name || "player").trim();
         setMembers((prev) => prev.filter((n) => n !== name));
       });
 
       ch.bind("pusher:subscription_error", (status) => {
-        console.error("[MP] subscription_error", status);
+        const code = status?.status || status?.code || "unknown";
+        const msg = status?.error || status?.message || "";
         setJoining(false);
-        setError(`Subscription error (${status}). Zkontroluj /api/pusher-auth a ENV na Vercelu.`);
+        setError(`Subscription error (code ${code}) ${msg ? "– " + msg : ""}.`);
       });
 
       ch.bind("pusher:error", (err) => {
         console.error("[MP] pusher:error", err);
-        setError("Pusher error – zkontroluj Client Events v Pusher App Settings.");
+        setError("Pusher error – zkontroluj Client events v Pusher App Settings.");
       });
 
-      // příjem startu kola → přepošleme do hry
       ch.bind("client-round-start", (payload) => {
+        const currentHost = [...members].sort()[0];
+        if (payload?.from !== currentHost) {
+          console.warn("[MP] Ignoring round-start from non-host:", payload?.from, "currentHost:", currentHost);
+          return;
+        }
+        lockUntilRef.current = Math.max(lockUntilRef.current, (payload.startAt || Date.now()) + 500);
+        setLastRoundId(payload.seed || payload.startAt || Date.now());
+        setLastResults([]);
         window.dispatchEvent(new CustomEvent("cg-mp-round", { detail: payload }));
+      });
+
+      ch.bind("client-round-result", (result) => {
+        setLastRoundId((prev) => prev ?? result.roundId ?? result.ts ?? Date.now());
+        setLastResults((prev) => {
+          const filtered = (prev || []).filter((r) => r.name !== result.name);
+          return [...filtered, result].sort((a, b) => b.score - a.score);
+        });
       });
 
       setChannel(ch);
     } catch (e) {
       console.error("[MP] createPusher failed", e);
-      setError(e?.message || "Nepodařilo se inicializovat Pusher.");
+      const msg = e?.message || String(e);
+      setError(`Nepodařilo se inicializovat Pusher: ${msg}`);
       setJoining(false);
     }
   };
 
   const leaveRoom = () => {
     try { pusher?.unsubscribe(`presence-${room}`); pusher?.disconnect(); } catch {}
-    setJoined(false); setJoining(false); setMembers([]); setChannel(null); setPusher(null);
+    setJoined(false);
+    setJoining(false);
+    setMembers([]);
+    setChannel(null);
+    setPusher(null);
+    setError("");
+    setLastResults([]);
   };
 
-  // Host pošle parametr kola + synchronní startAt
   const startSynchronizedRound = () => {
     if (!channel) return;
-    // countdown 3.5s (buffer na síť + 3-2-1)
-    const startAt = Date.now() + 3500;
 
+    const currentHost = hostName;
+    if (currentHost !== username) {
+      setError("Start může spustit pouze hostitel.");
+      return;
+    }
+    if (members.length < 2) {
+      setError("Start je možný až od 2 hráčů v místnosti.");
+      return;
+    }
+    if (Date.now() < lockUntilRef.current) return;
+
+    const startAt = Date.now() + 3500;
     const payload = {
-      seed: Date.now(),                         // deterministický target
-      tick: Math.floor(26 + Math.random() * 6), // 26–31 ms
-      speed: Number((0.03 + Math.random() * 0.02).toFixed(3)), // 0.030–0.050
+      seed: Date.now(),
+      tick: Math.floor(26 + Math.random() * 6),
+      speed: Number((0.03 + Math.random() * 0.02).toFixed(3)),
       maxTime: 12000,
-      startAt,                                  // <<< synchronizace
+      startAt,
+      from: username,
+      room,
     };
 
-    // klientská událost (vyžaduje zapnuté „Client events“ v Pusher App Settings)
+    lockUntilRef.current = startAt + 500;
+    setLastRoundId(payload.seed);
+    setLastResults([]);
+
     channel.trigger("client-round-start", payload);
-    // host rovnou spustí taky
     window.dispatchEvent(new CustomEvent("cg-mp-round", { detail: payload }));
   };
 
   const canStart = joined && isHost && members.length >= 2;
+
+  // Pomocný text proč je Start zamčený
+  let startHint = "";
+  if (!joined) startHint = "Nejsi připojen/á v místnosti.";
+  else if (members.length < 2) startHint = "Čekám alespoň na 2 hráče v místnosti.";
+  else if (!isHost) startHint = `Start spouští hostitel (${hostName || "—"}).`;
 
   return (
     <section className="rounded-2xl bg-white shadow-soft border border-neutral-200 p-6 dark:bg-slate-900 dark:border-slate-800">
@@ -134,7 +213,7 @@ export default function Multiplayer() {
             <input
               className="px-3 py-2 rounded-lg border border-neutral-300 dark:bg-slate-900 dark:border-slate-700"
               value={username}
-              onChange={(e) => setUsername(e.target.value.slice(0, 24))}
+              onChange={(e) => setUsername(e.target.value.replace(/\s+/g, " ").trim().slice(0, 24))}
               placeholder="Tvoje přezdívka"
             />
           </div>
@@ -150,7 +229,9 @@ export default function Multiplayer() {
           </div>
 
           <div className="flex items-end">
-            <Btn onClick={joinRoom} disabled={joining}>{joining ? "Připojuji…" : "Připojit se"}</Btn>
+            <Btn onClick={joinRoom} disabled={joining}>
+              {joining ? "Připojuji…" : "Připojit se"}
+            </Btn>
           </div>
 
           {error && (
@@ -166,16 +247,25 @@ export default function Multiplayer() {
               <div className="text-sm text-slate-500">Místnost:</div>
               <div className="font-semibold">{room}</div>
               <div className="text-xs text-slate-500 mt-1">
-                {isHost ? "Jsi host" : "Hostem je hráč s abecedně prvním jménem"}
+                Hostitel: <strong>{hostName || "—"}</strong>
+              </div>
+              <div className="text-xs text-slate-500 mt-1">
+                Debug: players={members.length} | isHost={String(isHost)}
               </div>
             </div>
             <div className="flex items-center gap-2">
-              <Btn onClick={startSynchronizedRound} disabled={!canStart} className={!canStart ? "opacity-60 cursor-not-allowed" : ""}>
+              <Btn
+                onClick={startSynchronizedRound}
+                disabled={!canStart}
+                className={!canStart ? "opacity-60 cursor-not-allowed" : ""}
+              >
                 Start round (host)
               </Btn>
               <Btn onClick={leaveRoom}>Leave</Btn>
             </div>
           </div>
+
+          <div className="mt-2 text-xs text-slate-500">{!canStart && startHint}</div>
 
           <div className="mt-4">
             <div className="text-sm text-slate-500 mb-1">Hráči v místnosti:</div>
@@ -186,9 +276,42 @@ export default function Multiplayer() {
                 </span>
               ))}
             </div>
-            <div className="text-xs text-slate-500 mt-2">
-              Start je možný až ve dvou a více hráčích; všem poběží synchronní 3-2-1.
+          </div>
+
+          {/* Last round results */}
+          <div className="mt-6">
+            <div className="flex items-baseline justify-between">
+              <h3 className="font-semibold">Last round</h3>
+              <div className="text-xs text-slate-500">
+                {lastRoundId ? `#${lastRoundId}` : "—"}
+              </div>
             </div>
+            {lastResults.length ? (
+              <div className="mt-2 overflow-x-auto">
+                <table className="min-w-full text-sm">
+                  <thead>
+                    <tr className="text-left text-slate-500">
+                      <th className="py-1 pr-4">Hráč</th>
+                      <th className="py-1 pr-4">Skóre</th>
+                      <th className="py-1 pr-4">Hodnota</th>
+                      <th className="py-1 pr-4">Cíl</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {lastResults.map((r, idx) => (
+                      <tr key={idx} className="border-t border-neutral-200 dark:border-slate-800">
+                        <td className="py-1 pr-4">{r.name}</td>
+                        <td className="py-1 pr-4 font-semibold">{r.score}</td>
+                        <td className="py-1 pr-4">{Number(r.value).toFixed(2)}×</td>
+                        <td className="py-1 pr-4">{Number(r.target).toFixed(2)}×</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            ) : (
+              <div className="text-xs text-slate-500 mt-2">Zatím žádné výsledky pro aktuální kolo.</div>
+            )}
           </div>
 
           {error && <p className="mt-3 text-sm text-red-600 dark:text-red-400">{error}</p>}
