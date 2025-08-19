@@ -32,14 +32,11 @@ export default function Multiplayer() {
 
   const lockUntilRef = useRef(0);
 
-  // hostName z "members" (pro UI)
   const hostName = useMemo(() => (members.length ? [...members].sort()[0] : null), [members]);
   const isHost = useMemo(() => !!hostName && hostName === username, [hostName, username]);
 
-  // cleanup
   useEffect(() => () => { try { pusher?.disconnect(); } catch {} }, [pusher]);
 
-  // Game → posílá výsledek
   useEffect(() => {
     const onGameResult = (e) => {
       const result = e.detail || {};
@@ -86,7 +83,6 @@ export default function Multiplayer() {
 
       const ch = p.subscribe(`presence-${cleanRoom}`);
 
-      // subscription succeeded → máme channel.members (aktuální!)
       ch.bind("pusher:subscription_succeeded", (mems) => {
         const list = [];
         mems.each((m) => list.push((m.info?.name || "player").trim()));
@@ -96,6 +92,11 @@ export default function Multiplayer() {
         setSubscribed(true);
         setJoining(false);
         setError("");
+        setChannel(ch);
+
+        // DEBUG: vystav do window pro konzoli
+        try { window.__mp = { pusher: p, channel: ch, room: cleanRoom }; } catch {}
+
         console.log("[MP] subscription_succeeded →", list);
       });
 
@@ -122,7 +123,6 @@ export default function Multiplayer() {
         setError("Pusher error – zkontroluj Client events v Pusher App Settings.");
       });
 
-      // přijmi start – určete hosta z AKTUÁLNÍHO ch.members (ne ze "stale" state)
       ch.bind("client-round-start", (payload) => {
         try {
           const currentMembers = [];
@@ -150,8 +150,6 @@ export default function Multiplayer() {
           return [...filtered, result].sort((a, b) => b.score - a.score);
         });
       });
-
-      setChannel(ch);
     } catch (e) {
       console.error("[MP] createPusher failed", e);
       const msg = e?.message || String(e);
@@ -170,13 +168,14 @@ export default function Multiplayer() {
     setPusher(null);
     setError("");
     setLastResults([]);
+    try { delete window.__mp; } catch {}
   };
 
   const startSynchronizedRound = () => {
     if (!channel) { setError("Channel není připraven."); return; }
     if (!subscribed) { setError("Ještě nejsi plně připojen/á (subscription)."); return; }
 
-    // ověř hosta dle realtime members
+    // ověř hosta přímo z realtime members (aktuální stav)
     const currentMembers = [];
     try { channel.members.each((m) => currentMembers.push(m.info?.name || "player")); } catch {}
     const currentHost = currentMembers.sort()[0];
@@ -213,7 +212,7 @@ export default function Multiplayer() {
       return;
     }
 
-    // host začne hned (bez latence)
+    // host startne hned (bez latence)
     window.dispatchEvent(new CustomEvent("cg-mp-round", { detail: payload }));
   };
 
