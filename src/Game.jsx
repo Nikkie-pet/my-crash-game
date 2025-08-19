@@ -1,663 +1,210 @@
 // src/Game.jsx
 import React, { useEffect, useRef, useState } from "react";
-import { useTranslation } from "react-i18next";
+import { toast } from "./components/Toasts";
 
-/* =======================
-   Mini UI pomocné prvky
-   ======================= */
-function Tooltip({ content, children }) {
-  const [open, setOpen] = useState(false);
-  return (
-    <div
-      className="relative inline-block"
-      onMouseEnter={() => setOpen(true)}
-      onMouseLeave={() => setOpen(false)}
-      onFocus={() => setOpen(true)}
-      onBlur={() => setOpen(false)}
-    >
-      {children}
-      {open && (
-        <div className="absolute z-50 -top-2 left-1/2 -translate-x-1/2 -translate-y-full px-3 py-2 text-xs rounded-lg bg-slate-900 text-white shadow-soft whitespace-nowrap dark:bg-slate-200 dark:text-slate-900">
-          {content}
-          <div className="absolute top-full left-1/2 -translate-x-1/2 w-0 h-0 border-x-8 border-x-transparent border-t-8 border-t-slate-900 dark:border-t-slate-200" />
-        </div>
-      )}
-    </div>
-  );
-}
+const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
 
-function Info({ label, value, hint }) {
-  return (
-    <Tooltip content={hint}>
-      <div className="cursor-help rounded-xl border border-neutral-200 bg-neutral-50 px-3 py-2 text-center dark:bg-slate-800 dark:border-slate-700">
-        <div className="text-[11px] uppercase tracking-wide text-slate-500 dark:text-slate-400">{label}</div>
-        <div className="font-mono text-sm">{value}</div>
-      </div>
-    </Tooltip>
-  );
-}
-
-function Card({ title, children, empty }) {
-  const isEmpty = !children || (Array.isArray(children) && children.length === 0);
-  return (
-    <section className="rounded-2xl bg-white shadow-soft border border-neutral-200 p-6 dark:bg-slate-900 dark:border-slate-800">
-      <div className="font-semibold mb-3">{title}</div>
-      {isEmpty ? <div className="text-sm text-slate-500 dark:text-slate-400">{empty}</div> : children}
-    </section>
-  );
-}
-
-function Row({ left, right }) {
-  return (
-    <li className="flex items-center justify-between">
-      <span className="text-slate-700 dark:text-slate-200">{left}</span>
-      <span className="font-mono text-slate-900 dark:text-white">{right}</span>
-    </li>
-  );
-}
-
-function Primary({ children, className = "", ...props }) {
-  return (
-    <button
-      {...props}
-      className={
-        "px-5 py-3 rounded-xl bg-slate-900 text-white hover:bg-slate-800 active:scale-[.99] transition shadow-soft dark:bg-white dark:text-slate-900 dark:hover:bg-neutral-100 " +
-        className
-      }
-    >
-      {children}
-    </button>
-  );
-}
-function Accent({ children, className = "", ...props }) {
-  return (
-    <button
-      {...props}
-      className={
-        "px-5 py-3 rounded-xl bg-emerald-500 text-white hover:bg-emerald-600 active:scale-[.99] transition shadow-soft " +
-        className
-      }
-    >
-      {children}
-    </button>
-  );
-}
-function Ghost({ children, className = "", ...props }) {
-  return (
-    <button
-      {...props}
-      className={
-        "px-5 py-3 rounded-xl bg-white border border-neutral-200 text-slate-900 hover:bg-neutral-100 active:scale-[.99] transition dark:bg-slate-900 dark:text-slate-100 dark:border-slate-700 dark:hover:bg-slate-800 " +
-        className
-      }
-    >
-      {children}
-    </button>
-  );
-}
-
-/* =======================
-   Hlavní komponenta hry
-   ======================= */
 export default function Game() {
-  const { t, i18n } = useTranslation();
+  const [running, setRunning] = useState(false);
+  const [value, setValue] = useState(1.0);       // aktuální „násobek“
+  const [target, setTarget] = useState(1.5);     // cíl (může přijít z MP payloadu)
+  const [tick, setTick] = useState(30);          // FPS (interval ms ~ 1000/tick)
+  const [speed, setSpeed] = useState(0.04);      // tempo růstu hodnoty za tick
+  const [maxTime, setMaxTime] = useState(12000); // ms
+  const [countdown, setCountdown] = useState(0); // ms do startu (sync v MP)
+  const [roundId, setRoundId] = useState(null);
 
-  // ----- Konstanta & parametry -----
-  const MAX_TIME = 12000; // ms limit kola
-  const PERFECT_THR = 0.02;
-  const GOOD_THR = 0.05;
-  const RAMP_MAX_BOOST = 0.6;
-
-  // streak násobení
-  const STREAK_STEP = 0.10;
-  const STREAK_CAP = 2.0;
-
-  // kvóta 30 her / 12 h
-  const QUOTA_TOTAL = 30;
-  const QUOTA_WINDOW_HOURS = 12;
-  const LS_QUOTA = "cg_quota";
-
-  // localStorage klíče
-  const LS = { points: "cg_points", bestError: "cg_best_error", history: "cg_history", diff: "cg_diff" };
-
-  // obtížnosti
-  const DIFFS = {
-    easy:   { speedMin: 0.020, speedMax: 0.040, tickMin: 28, tickMax: 34 },
-    normal: { speedMin: 0.030, speedMax: 0.050, tickMin: 26, tickMax: 32 },
-    hard:   { speedMin: 0.040, speedMax: 0.060, tickMin: 24, tickMax: 30 }
-  };
-
-  // ----- Stavy -----
-  const [phase, setPhase] = useState("idle"); // idle | ready | countdown | running | done
-  const [countdown, setCountdown] = useState(0);
-
-  const [difficulty, setDifficulty] = useState(() => localStorage.getItem(LS.diff) || "easy");
-  const [target, setTarget] = useState(1.78);
-  const [value, setValue] = useState(1.00);
-  const [displayValue, setDisplayValue] = useState(1.00);
-
-  const [result, setResult] = useState(null);
-  const [speed, setSpeed] = useState(0.03);
-  const [tick, setTick] = useState(30);
-  const [elapsed, setElapsed] = useState(0);
-  const [maxReach, setMaxReach] = useState(1.00);
-
-  const [points, setPoints] = useState(0);
-  const [streak, setStreak] = useState(0);
-  const [bestError, setBestError] = useState(Infinity);
-  const [history, setHistory] = useState([]);
-  const [topRuns, setTopRuns] = useState([]);
-  const [topPrecision, setTopPrecision] = useState([]);
-
-  const [dailyMode, setDailyMode] = useState(false);
-  const [playsLeft, setPlaysLeft] = useState(QUOTA_TOTAL);
-  const [resetAt, setResetAt] = useState(null);
-
-  const [muted, setMuted] = useState(() => localStorage.getItem("muted") === "1");
-
-  // ----- Refy / časovače -----
-  const growRef = useRef(null);
-  const elapsedRef = useRef(null);
+  const mutedRef = useRef(localStorage.getItem("muted") === "1");
   const rafRef = useRef(null);
-  const audioCtxRef = useRef(null);
-  const cdRef = useRef(null);
-  // multiplayer maxTime pro kolo (může přijít z MP eventu)
-  const mpMaxTimeRef = useRef(MAX_TIME);
+  const startAtRef = useRef(0);
+  const startTimeRef = useRef(0);
 
-  // ----- Helpery -----
-  const rand = (min, max, d = 3) => Number((Math.random() * (max - min) + min).toFixed(d));
-  const computeMaxReach = (base = 1.0, s, tickMs, maxMs) => {
-    let v = base;
-    for (let t = 0; t < maxMs; t += tickMs) {
-      const ramp = 1 + Math.min(t / 4000, RAMP_MAX_BOOST);
-      v = +(v + s * ramp).toFixed(2);
-    }
-    return Number(v.toFixed(2));
-  };
-  const fmtTime = (ms) => {
-    const s = Math.max(0, Math.floor(ms / 1000));
-    const h = Math.floor(s / 3600);
-    const m = Math.floor((s % 3600) / 60);
-    const ss = s % 60;
-    return `${h}h ${m}m ${ss}s`;
-  };
-  const vibrate = (pattern = 20) => { try { if (navigator.vibrate) navigator.vibrate(pattern); } catch {} };
-
-  // zvuk
-  const ensureAudioCtx = () => {
-    if (!audioCtxRef.current) {
-      try { audioCtxRef.current = new (window.AudioContext || window.webkitAudioContext)(); } catch {}
-    }
-    return audioCtxRef.current;
-  };
-  const beep = (freq = 600, dur = 120, type = "sine", vol = 0.03) => {
-    if (muted) return;
-    const ctx = ensureAudioCtx(); if (!ctx) return;
-    const osc = ctx.createOscillator(); const g = ctx.createGain();
-    osc.type = type; osc.frequency.value = freq; g.gain.value = vol;
-    osc.connect(g); g.connect(ctx.destination); osc.start();
-    setTimeout(() => { try { osc.stop(); osc.disconnect(); g.disconnect(); } catch {} }, dur);
-  };
-
-  // ----- Init z localStorage + kvóta -----
+  // zvuk on/off
   useEffect(() => {
-    const p = Number(localStorage.getItem(LS.points) || 0); if (!Number.isNaN(p)) setPoints(p);
-    const be = Number(localStorage.getItem(LS.bestError) || Infinity); if (!Number.isNaN(be)) setBestError(be);
-    const hist = JSON.parse(localStorage.getItem(LS.history) || "[]"); if (Array.isArray(hist)) setHistory(hist);
-
-    const saved = JSON.parse(localStorage.getItem(LS_QUOTA) || "null");
-    const now = Date.now();
-    if (saved && saved.resetAt && now < saved.resetAt) {
-      setPlaysLeft(saved.playsLeft); setResetAt(saved.resetAt);
-    } else {
-      const nextReset = now + QUOTA_WINDOW_HOURS * 3600 * 1000;
-      const init = { playsLeft: QUOTA_TOTAL, resetAt: nextReset };
-      localStorage.setItem(LS_QUOTA, JSON.stringify(init));
-      setPlaysLeft(QUOTA_TOTAL); setResetAt(nextReset);
-    }
-  }, []);
-
-  // ----- Mute sync z App.jsx -----
-  useEffect(() => {
-    const onMute = (e) => setMuted(!!e.detail?.muted);
+    const onMute = (e) => { mutedRef.current = !!e.detail?.muted; };
     window.addEventListener("cg-mute-change", onMute);
     return () => window.removeEventListener("cg-mute-change", onMute);
   }, []);
 
-  // ----- Inertie zobrazené hodnoty -----
+  // posluchač MP payloadu
   useEffect(() => {
-    const INERTIA = 0.18;
-    const tick = () => {
-      setDisplayValue((d) => {
-        const diff = value - d;
-        if (Math.abs(diff) < 0.001) return value;
-        return d + diff * INERTIA;
-      });
-      rafRef.current = requestAnimationFrame(tick);
+    const onRound = (e) => {
+      const p = e.detail || {};
+      const t = Number(p.target ?? 1.5); // ← ← přeber target z payloadu (klíčové)
+      const tk = Number(p.tick ?? 30);
+      const sp = Number(p.speed ?? 0.04);
+      const mt = Number(p.maxTime ?? 12000);
+      const sa = Number(p.startAt ?? Date.now() + 2000);
+      setTarget(clamp(t, 1.0, 999));
+      setTick(clamp(tk, 10, 120));
+      setSpeed(clamp(sp, 0.005, 0.2));
+      setMaxTime(clamp(mt, 3000, 60000));
+      setValue(1.0);
+      setRunning(false);
+      setRoundId(p.seed || sa);
+      // odpočet do společného startu
+      startAtRef.current = sa;
+      setCountdown(Math.max(0, sa - Date.now()));
+      // počkáme do startu a spustíme
+      scheduleStartAt(sa);
+      toast(`Nové kolo – cíl ${t.toFixed(2)}×`, "info");
     };
-    rafRef.current = requestAnimationFrame(tick);
-    return () => cancelAnimationFrame(rafRef.current);
-  }, [value]);
-
-  // ----- Multiplayer: start kola přes custom event -----
-  useEffect(() => {
-    const onMpRound = (e) => {
-      const { seed, tick: tk, speed: spd, maxTime, startAt } = e.detail || {};
-      if (!tk || !spd) return;
-
-      const MAX = Number(maxTime || 12000);
-      mpMaxTimeRef.current = MAX;
-
-      setSpeed(Number(spd));
-      setTick(Number(tk));
-
-      const maxV = computeMaxReach(1.0, Number(spd), Number(tk), MAX);
-      setMaxReach(maxV);
-
-      // deterministický target ze seed
-      const rng = (() => {
-        let s = Number(seed) % 2147483647;
-        return () => (s = (s * 48271) % 2147483647) / 2147483647;
-      })();
-      const tgt = Number((1 + rng() * (maxV - 1)).toFixed(2));
-      setTarget(tgt);
-
-      setValue(1.00);
-      setDisplayValue(1.00);
-      setElapsed(0);
-      setResult(null);
-
-      if (startAt && startAt > Date.now()) {
-        // synchronní odpočet
-        startCountdown(Math.ceil((startAt - Date.now()) / 1000), startAt);
-      } else {
-        setPhase("ready");
-        setTimeout(() => startCountdown(3), 600); // krátký buffer + countdown
-      }
-    };
-
-    window.addEventListener("cg-mp-round", onMpRound);
-    return () => window.removeEventListener("cg-mp-round", onMpRound);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    window.addEventListener("cg-mp-round", onRound);
+    return () => window.removeEventListener("cg-mp-round", onRound);
   }, []);
 
-  // ----- Solo start kola -----
-  const startRound = () => {
-    const now = Date.now();
-    if (resetAt && now >= resetAt) {
-      const nextReset = now + QUOTA_WINDOW_HOURS * 3600 * 1000;
-      setPlaysLeft(QUOTA_TOTAL); setResetAt(nextReset);
-      localStorage.setItem(LS_QUOTA, JSON.stringify({ playsLeft: QUOTA_TOTAL, resetAt: nextReset }));
-    }
-    if (playsLeft <= 0) { alert(t("alertQuota") || "Vyčerpáno. Zkus znovu po resetu."); return; }
-
-    const d = DIFFS[difficulty] || DIFFS.easy;
-    const s = rand(d.speedMin, d.speedMax);
-    const tk = Math.floor(rand(d.tickMin, d.tickMax, 0));
-    setSpeed(s); setTick(tk);
-
-    const maxV = computeMaxReach(1.0, s, tk, MAX_TIME);
-    setMaxReach(maxV);
-
-    // target v rozsahu 1..maxReach (víc adrenalinu)
-    const todayKey = new Date().toISOString().slice(0, 10);
-    const seededBetween = (min, max) => {
-      const seed = Array.from(todayKey).reduce((a, ch) => a + ch.charCodeAt(0), 0);
-      const rng = (seed % 10000) / 10000;
-      return Number((min + rng * (max - min)).toFixed(2));
-    };
-    const tgt = dailyMode
-      ? Math.max(1, Math.min(maxV, seededBetween(1.0, maxV)))
-      : Number((1 + Math.random() * (maxV - 1)).toFixed(2));
-
-    mpMaxTimeRef.current = MAX_TIME; // solo
-
-    setTarget(tgt);
-    setValue(1.00); setDisplayValue(1.00);
-    setElapsed(0); setResult(null);
-    setPhase("ready");
-
-    // kratičké okno na prohlédnutí parametrů + 3-2-1
-    setTimeout(() => startCountdown(3), 500);
-  };
-
-  // ----- Odpočet a start -----
-  const startCountdown = (seconds = 3, absoluteStartAtMs = null) => {
-    setPhase("countdown");
-    if (cdRef.current) clearInterval(cdRef.current);
-
-    if (absoluteStartAtMs) {
-      // synchronizace na přesný čas
-      const tickCd = () => {
-        const diff = Math.max(0, absoluteStartAtMs - Date.now());
-        const secs = Math.ceil(diff / 1000);
-        setCountdown(secs);
-        if (diff <= 0) {
-          clearInterval(cdRef.current);
-          beginRunning();
-        }
-      };
-      tickCd();
-      cdRef.current = setInterval(tickCd, 100);
-      return;
-    }
-
-    // lokální 3-2-1
-    setCountdown(seconds);
-    cdRef.current = setInterval(() => {
-      setCountdown((c) => {
-        if (c <= 1) {
-          clearInterval(cdRef.current);
-          beginRunning();
-          return 0;
-        }
-        return c - 1;
-      });
-    }, 1000);
-  };
-
-  // ----- Běh kola -----
-  const beginRunning = () => {
-    // odečíst pokus
-    setPlaysLeft((n) => {
-      const next = Math.max(0, n - 1);
-      localStorage.setItem(LS_QUOTA, JSON.stringify({ playsLeft: next, resetAt }));
-      return next;
-    });
-
-    vibrate(10); beep(520, 80, "square");
-    setPhase("running");
-    const startedAt = performance.now();
-
-    // růst hodnoty
-    growRef.current = setInterval(() => {
-      const e = performance.now() - startedAt;
-      const ramp = 1 + Math.min(e / 4000, RAMP_MAX_BOOST);
-      setValue((v) => +(v + speed * ramp).toFixed(2));
-    }, tick);
-
-    // časovač limitu
-    elapsedRef.current = setInterval(() => {
-      const e = performance.now() - startedAt;
-      setElapsed(e);
-      if (e >= mpMaxTimeRef.current) {
-        clearInterval(growRef.current); clearInterval(elapsedRef.current);
-        const diff = Math.abs(value - target) + 0.15; // penalizace při time-outu
-        finishRound(diff);
-      }
-    }, 50);
-  };
-
-  // ----- STOP (hráč trefuje) -----
-  const stop = () => {
-    if (phase !== "running") return;
-    vibrate([20, 40, 20]); beep(420, 90, "sine");
-    clearInterval(growRef.current); clearInterval(elapsedRef.current);
-    const diff = Math.abs(value - target);
-    finishRound(diff);
-  };
-
-  // ----- Sdílení výsledku -----
-  const shareResult = async (res) => {
-    const text = `I hit ${value.toFixed(2)}x vs target ${target.toFixed(2)}x (err ${res.diff.toFixed(2)}) — score +${res.runPoints}. Try it: ${location.href}`;
-    try {
-      if (navigator.share) await navigator.share({ title: "Crash Aim", text, url: location.href });
-      else { await navigator.clipboard.writeText(text); alert("Result copied to clipboard!"); }
-    } catch {
-      try { await navigator.clipboard.writeText(text); alert("Result copied to clipboard!"); } catch {}
-    }
-  };
-
-  // ----- Vyhodnocení -----
-  const finishRound = (diff) => {
-    let runPoints = Math.max(0, Math.round(150 - diff * 300));
-    let note = "OK";
-
-    if (diff <= PERFECT_THR) {
-      runPoints += 100; note = t("resultNotePerfect") || "Perfect!";
-      setStreak((s) => s + 1);
-      vibrate([30,60,30]); beep(900,150,"triangle"); setTimeout(()=>beep(1200,120,"triangle"),120);
-    } else if (diff <= GOOD_THR) {
-      runPoints += 40; note = t("resultNoteGood") || "Good";
-      setStreak((s) => s + 1); vibrate(30); beep(750,120,"sine");
-    } else {
-      note = t("resultNoteMiss") || "Miss";
-      setStreak(0); beep(220,120,"sine");
-    }
-
-    const futureStreak = diff <= GOOD_THR ? streak + 1 : 0;
-    const streakMult = Math.min(1 + futureStreak * STREAK_STEP, STREAK_CAP);
-    runPoints = Math.round(runPoints * streakMult);
-
-    setPoints((p) => { const np = p + runPoints; localStorage.setItem(LS.points, String(np)); return np; });
-    setBestError((prev) => { const next = Math.min(prev, diff); localStorage.setItem(LS.bestError, String(next)); return next; });
-
-    const entry = { ts: Date.now(), target, value, diff: +diff.toFixed(2), runPoints, tick, speed: +speed.toFixed(3), maxReach };
-    setHistory((h) => { const next = [entry, ...h].slice(0, 10); localStorage.setItem(LS.history, JSON.stringify(next)); return next; });
-    setTopRuns((a) => [...a, entry].sort((x,y)=>y.runPoints-x.runPoints).slice(0,5));
-    setTopPrecision((a) => [...a, entry].sort((x,y)=>x.diff-y.diff).slice(0,5));
-
-    setResult({ value, diff, runPoints, note, speed, tick, maxReach, elapsed: Math.round(elapsed), streakMult });
-    setPhase("done");
-  };
-
-  // ----- Hotkeys -----
+  // keyboard – Space/Enter start/stop
   useEffect(() => {
     const onKey = (e) => {
-      if (e.repeat) return;
-      if (e.key === "Enter") {
-        if (phase === "idle" || phase === "done") startRound();
-      }
-      if (e.key === " ") {
-        if (phase === "running") { e.preventDefault(); stop(); }
+      if (e.code === "Space" || e.code === "Enter") {
+        e.preventDefault();
+        handleClick();
       }
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [phase]);
+  }, [running]);
 
-  // cleanup
-  useEffect(() => {
-    return () => {
-      clearInterval(growRef.current);
-      clearInterval(elapsedRef.current);
-      clearInterval(cdRef.current);
-      cancelAnimationFrame(rafRef.current);
+  const scheduleStartAt = (ts) => {
+    const delay = Math.max(0, ts - Date.now());
+    if (delay < 5) {
+      startRun();
+      return;
+    }
+    setTimeout(() => startRun(), delay);
+    // vizuální odpočet
+    const id = setInterval(() => {
+      const rest = Math.max(0, ts - Date.now());
+      setCountdown(rest);
+      if (rest <= 0) clearInterval(id);
+    }, 100);
+  };
+
+  const startRun = () => {
+    setValue(1.0);
+    setRunning(true);
+    startTimeRef.current = Date.now();
+    loop();
+  };
+
+  const stopRun = () => {
+    setRunning(false);
+    cancelAnimationFrame(rafRef.current);
+    reportResult();
+  };
+
+  const loop = () => {
+    if (!running) return;
+    const elapsed = Date.now() - startTimeRef.current;
+    // jednoduchý růst – lineární o speed za tick (~rychlost je „vizuální“ parametr)
+    const next = 1.0 + (elapsed / (1000 / speed));
+    setValue(next);
+
+    if (elapsed >= maxTime) {
+      // „crash“ – konec kola bez kliknutí
+      setRunning(false);
+      reportResult(true);
+      return;
+    }
+    rafRef.current = requestAnimationFrame(loop);
+  };
+
+  const handleClick = () => {
+    if (countdown > 0) return; // ještě neodstartovalo
+    if (!running) {
+      // sólo test (mimo MP) – vytvoří lokální cíle a parametry
+      const soloTarget = Number((1.10 + Math.random() * (5.0 - 1.10)).toFixed(2));
+      setTarget(soloTarget);
+      setTick(30);
+      setSpeed(0.04);
+      setMaxTime(12000);
+      setRoundId(Date.now());
+      setValue(1.0);
+      setCountdown(0);
+      startRun();
+      toast(`Solo kolo – cíl ${soloTarget.toFixed(2)}×`, "info");
+    } else {
+      stopRun();
+    }
+  };
+
+  const reportResult = (crashed = false) => {
+    const name = (localStorage.getItem("mp_name") || "Player").trim();
+    const v = Number(value);
+    const t = Number(target);
+    // skóre – čím blíž k cíli, tím lépe, přesnost na dvě desetiny
+    const diff = Math.abs(v - t);
+    const score = Math.max(0, Math.round((1000 - diff * 1000)));
+
+    const payload = {
+      name,
+      value: v,
+      target: t,     // ← posíláme přesně ten target, který všichni viděli
+      score,
+      crashed: !!crashed,
+      ts: Date.now(),
+      roundId,
     };
-  }, []);
 
-  // ----- Lokalizované „pravidla“ -----
-  const rules = i18n.language?.startsWith("cs")
-    ? {
-        title: "📜 Pravidla",
-        goal: "Cíl: Zastav multiplikátor co nejblíže k cíli (např. 2.13x vs 2.15x).",
-        controls: "Ovládání: ⏎ Enter = Start, Space = Stop. Nebo tlačítka Start/Stop.",
-        scoring: "Bodování: Čím menší chyba, tím více bodů. Perfect (≤ 0.02) dává bonus a zvyšuje streak.",
-        tip: "Tip: Sleduj tempo růstu (base speed + ramp-up). Na Easy je růst pomalejší."
-      }
-    : {
-        title: "📜 Rules",
-        goal: "Goal: Stop the multiplier as close to the target as possible (e.g. 2.13x vs 2.15x).",
-        controls: "Controls: ⏎ Enter = Start, Space = Stop. Or use the buttons.",
-        scoring: "Scoring: Smaller error = more points. Perfect (≤ 0.02) adds bonus and increases streak.",
-        tip: "Tip: Watch growth pace (base speed + ramp-up). Easy grows slower."
-      };
+    window.dispatchEvent(new CustomEvent("cg-game-result", { detail: payload }));
+    if (!mutedRef.current) {
+      try {
+        // jednoduché „píp“ podle úspěchu
+        new Audio(
+          score > 900
+            ? "data:audio/wav;base64,UklGRiQAAABXQVZFZm10IBAAAAABAAEAESsAACJWAAACABAAZGF0YQAAAAA="
+            : "data:audio/wav;base64,UklGRiQAAABXQVZFZm10IBAAAAABAAEAESsAACJWAAACABAAZGF0YQAAAAA="
+        ).play();
+      } catch {}
+    }
+  };
 
-  /* =======================
-         R E N D E R
-     ======================= */
   return (
-    <div className="grid gap-6">
-      {/* Hlavní info */}
-      <section className="rounded-2xl bg-white shadow-soft border border-neutral-200 p-6 dark:bg-slate-900 dark:border-slate-800">
-        <div className="flex flex-col md:flex-row items-start md:items-center justify-between gap-4">
-          <div>
-            <h2 className="text-lg font-semibold tracking-tight">
-              {t("title", { x: `${target.toFixed(2)}x` }) || `Aim for ${target.toFixed(2)}x`}
-            </h2>
-            <p className="text-sm text-slate-500 dark:text-slate-400">
-              {t("targetRange", { max: maxReach.toFixed(2) }) || `Range: 1.00–${maxReach.toFixed(2)}x`}
-            </p>
-          </div>
-
-          <div className="flex items-center gap-6 text-sm">
-            <div className="text-right">
-              <div>{t("points") || "Points"}: <span className="font-semibold">{points}</span></div>
-              <div>
-                {t("streak") || "Streak"}: <span className="font-semibold">{streak}</span>{" "}
-                <span className="text-slate-400"> (x{Math.min(1 + streak * STREAK_STEP, STREAK_CAP).toFixed(2)})</span>
-              </div>
-              <div className="text-slate-500 dark:text-slate-400">
-                {t("bestErr") || "Best err"}: {bestError === Infinity ? "-" : bestError.toFixed(2)}
-              </div>
-              <div className="text-slate-500 dark:text-slate-400">
-                {t("playsLeft") || "Plays left"}: <span className="font-semibold">{playsLeft}</span>
-                {resetAt && <> • {(t("resetIn", { time: fmtTime(resetAt - Date.now()) }) || `reset in ${fmtTime(resetAt - Date.now())}`)}</>}
-              </div>
-            </div>
-
-            <label className="flex items-center gap-2">
-              <input type="checkbox" className="accent-emerald-600" checked={dailyMode} onChange={(e)=>setDailyMode(e.target.checked)} />
-              <span className="text-sm">{t("daily") || "Daily seed"}</span>
-            </label>
-          </div>
+    <section className="rounded-2xl bg-white shadow-soft border border-neutral-200 p-6 dark:bg-slate-900 dark:border-slate-800">
+      <div className="flex items-center justify-between">
+        <h2 className="text-lg font-semibold">Crash Aim</h2>
+        <div className="text-sm text-slate-500">
+          {countdown > 0 ? `Start za ${(countdown / 1000).toFixed(1)}s` : running ? "Běží…" : "Připraveno"}
         </div>
-      </section>
-
-      {/* volba obtížnosti */}
-      <section className="rounded-2xl bg-white shadow-soft border border-neutral-200 p-4 flex items-center justify-between gap-3 text-sm dark:bg-slate-900 dark:border-slate-800">
-        <div className="font-medium">Difficulty</div>
-        <div className="flex gap-2">
-          {["easy","normal","hard"].map((d) => (
-            <button
-              key={d}
-              onClick={() => { setDifficulty(d); localStorage.setItem(LS.diff, d); }}
-              className={`px-3 py-1.5 rounded-lg border transition ${
-                difficulty === d
-                  ? "bg-emerald-500 text-white border-emerald-500"
-                  : "bg-white border-neutral-200 text-slate-900 hover:bg-neutral-100 dark:bg-slate-900 dark:text-slate-100 dark:border-slate-700 dark:hover:bg-slate-800"
-              }`}
-            >
-              {d[0].toUpperCase() + d.slice(1)}
-            </button>
-          ))}
-        </div>
-      </section>
-
-      {/* READY / PARAMETRY + tooltipy + COUNTDOWN */}
-      {(phase === "ready" || phase === "countdown") ? (
-        <section className="rounded-2xl bg-white shadow-soft border border-neutral-200 p-6 text-center dark:bg-slate-900 dark:border-slate-800">
-          <div className="text-center mb-4 text-xl font-semibold">
-            {phase === "ready" ? (t("getReady") || "Get Ready") : (t("startingIn") || "Starting in")}{phase === "countdown" ? ` ${countdown}` : ""}
-          </div>
-
-          <div className="grid grid-cols-2 md:grid-cols-6 gap-3 text-sm">
-            <Info label={t("target") || "Target"} value={`${target.toFixed(2)}x`}
-                  hint={i18n.language?.startsWith("cs") ? "Požadovaná hodnota násobiče pro ideální zásah." : "Target multiplier for a perfect hit."} />
-            <Info label={t("range") || "Range"} value={`1.00–${maxReach.toFixed(2)}x`}
-                  hint={i18n.language?.startsWith("cs") ? "Dosažitelný rozsah v tomto kole." : "Reachable range in this round."} />
-            <Info label={t("baseSpeed") || "Base speed"} value={`${speed.toFixed(3)}/tick`}
-                  hint={i18n.language?.startsWith("cs") ? "Základní tempo růstu. Zrychluje se ramp-upem." : "Base growth pace; ramp-up accelerates it."} />
-            <Info label="Tick" value={`${tick}ms`}
-                  hint={i18n.language?.startsWith("cs") ? "Jak často se hodnota přepočítá. Vyšší = pomalejší." : "How often value updates. Higher = slower."} />
-            <Info label="Ramp-up" value={`+${Math.round(RAMP_MAX_BOOST*100)}%`}
-                  hint={i18n.language?.startsWith("cs") ? "Postupné zrychlování v průběhu kola." : "Gradual acceleration."} />
-            <Info label={t("timeLimit") || "Time limit"} value={`${(mpMaxTimeRef.current/1000).toFixed(0)}s`}
-                  hint={i18n.language?.startsWith("cs") ? "Po limitu kolo skončí s penalizací." : "After limit, the round ends with a penalty."} />
-          </div>
-
-          <div className="flex justify-center gap-3 mt-6">
-            {phase === "ready" && <Primary onClick={() => startCountdown(3)}>{t("startNow") || "Start now"}</Primary>}
-            <Ghost onClick={() => setPhase("idle")}>{t("cancel") || "Cancel"}</Ghost>
-          </div>
-        </section>
-      ) : (
-        <>
-          {/* PROGRESS */}
-          <div className="h-2 w-full bg-neutral-200 rounded-full overflow-hidden dark:bg-slate-800">
-            <div
-              className="h-2 bg-emerald-500 transition-[width] duration-75"
-              style={{ width: `${Math.min((elapsed / mpMaxTimeRef.current) * 100, 100)}%` }}
-            />
-          </div>
-
-          {/* ZOBRAZENÁ HODNOTA */}
-          <section className="rounded-2xl bg-white shadow-soft border border-neutral-200 p-10 text-center dark:bg-slate-900 dark:border-slate-800">
-            <div className={`text-7xl font-extrabold tracking-tight ${phase === "running" ? "animate-pulse" : ""}`}>
-              {displayValue.toFixed(2)}<span className="text-emerald-500">x</span>
-            </div>
-          </section>
-
-          {/* OVLÁDÁNÍ */}
-          <div className="flex justify-center gap-3">
-            {(phase === "idle" || phase === "done") && <Primary onClick={startRound}>{t("startRound") || "Start round"}</Primary>}
-            {phase === "running" && <Accent onClick={stop}>{t("stop") || "Stop"}</Accent>}
-          </div>
-        </>
-      )}
-
-      {/* VÝSLEDEK */}
-      {result && (
-        <section className="rounded-2xl bg-white shadow-soft border border-neutral-200 p-6 text-center dark:bg-slate-900 dark:border-slate-800">
-          <div className="text-sm text-slate-600 dark:text-slate-300">
-            value <span className="font-mono">{result.value.toFixed(2)}x</span> • error <span className="font-mono">{result.diff.toFixed(2)}</span>
-          </div>
-          <div className="mt-1 font-semibold">
-            {result.note} • +{result.runPoints} {t("points") || "points"} (streak x{result.streakMult.toFixed(2)})
-          </div>
-          <div className="mt-4 flex justify-center gap-3">
-            <Ghost onClick={startRound}>{t("startRound") || "Start round"}</Ghost>
-            <Ghost onClick={() => shareResult(result)}>Share</Ghost>
-          </div>
-        </section>
-      )}
-
-      {/* ŽEBŘÍČKY */}
-      <div className="grid md:grid-cols-2 gap-6">
-        <Card title={t("topRuns") || "Top runs"} empty={t("noRunsYet") || "No runs yet"}>
-          <ol className="text-sm grid gap-1">
-            {topRuns.map((r, i) => (
-              <Row key={`rp_${i}`} left={`#${i+1} • tgt ${r.target.toFixed(2)} • val ${r.value.toFixed(2)}`} right={`+${r.runPoints} pts`} />
-            ))}
-          </ol>
-        </Card>
-        <Card title={t("topPrecision") || "Top precision"} empty={t("noRunsYet") || "No runs yet"}>
-          <ol className="text-sm grid gap-1">
-            {topPrecision.map((r, i) => (
-              <Row key={`pr_${i}`} left={`#${i+1} • tgt ${r.target.toFixed(2)} • val ${r.value.toFixed(2)}`} right={`err ${r.diff.toFixed(2)}`} />
-            ))}
-          </ol>
-        </Card>
       </div>
 
-      {/* HISTORIE */}
-      {history.length > 0 && (
-        <section className="rounded-2xl bg-white shadow-soft border border-neutral-200 p-6 dark:bg-slate-900 dark:border-slate-800">
-          <div className="font-semibold mb-3">{t("recentRuns") || "Recent runs"}</div>
-          <ul className="text-xs text-slate-600 dark:text-slate-300 grid gap-1 max-h-40 overflow-auto pr-1">
-            {history.map((r, i) => (
-              <li key={r.ts + "_" + i} className="flex justify-between">
-                <span>{new Date(r.ts).toLocaleTimeString()} • tgt {r.target.toFixed?.(2) ?? r.target} • val {r.value.toFixed?.(2) ?? r.value}</span>
-                <span>err {r.diff.toFixed?.(2) ?? r.diff} • +{r.runPoints}</span>
-              </li>
-            ))}
-          </ul>
-        </section>
-      )}
-
-      {/* PRAVIDLA – sticky panel */}
-      <div className="sticky bottom-3 z-40">
-        <section className="mx-auto max-w-3xl rounded-2xl bg-white shadow-soft border border-neutral-200 p-4 dark:bg-slate-900 dark:border-slate-800">
-          <div className="text-sm font-semibold mb-1">{rules.title}</div>
-          <ul className="text-xs text-slate-700 dark:text-slate-300 grid gap-1">
-            <li>• {rules.goal}</li>
-            <li>• {rules.controls}</li>
-            <li>• {rules.scoring}</li>
-            <li>• {rules.tip}</li>
-          </ul>
-        </section>
+      <div className="mt-4 grid gap-3 md:grid-cols-4">
+        <Field label="Cíl (×)">
+          <strong className="text-2xl">{target.toFixed(2)}</strong>
+        </Field>
+        <Field label="Hodnota (×)">
+          <span className="text-xl">{value.toFixed(2)}</span>
+        </Field>
+        <Field label="Rychlost">
+          <span className="text-sm">{speed}</span>
+        </Field>
+        <Field label="FPS">
+          <span className="text-sm">{tick}</span>
+        </Field>
       </div>
+
+      <div className="mt-6">
+        <button
+          onClick={handleClick}
+          disabled={countdown > 0}
+          className="px-5 py-3 rounded-xl bg-emerald-600 text-white hover:bg-emerald-700 disabled:opacity-50"
+        >
+          {running ? "Stop" : "Start"}
+        </button>
+      </div>
+
+      <p className="text-xs text-slate-500 mt-4">
+        Space / Enter – Start/Stop. Cílem je trefit se co nejblíž hodnotě „Cíl“.
+      </p>
+    </section>
+  );
+}
+
+function Field({ label, children }) {
+  return (
+    <div className="p-3 rounded-xl bg-neutral-50 dark:bg-slate-800/50 border border-neutral-200 dark:border-slate-700">
+      <div className="text-xs text-slate-500 mb-1">{label}</div>
+      {children}
     </div>
   );
 }
