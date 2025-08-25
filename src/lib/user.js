@@ -3,7 +3,8 @@ export function getOrCreateUser() {
   let id = localStorage.getItem("mp_uid");
   if (!id) {
     const buf = new Uint8Array(8);
-    (crypto?.getRandomValues ? crypto.getRandomValues(buf) : buf).forEach((v, i) => (buf[i] = v));
+    if (globalThis.crypto?.getRandomValues) crypto.getRandomValues(buf);
+    else for (let i = 0; i < buf.length; i++) buf[i] = Math.floor(Math.random() * 256);
     id = Array.from(buf).map(b => b.toString(16).padStart(2, "0")).join("");
     localStorage.setItem("mp_uid", id);
   }
@@ -30,7 +31,8 @@ export function initials(name) {
 
 export function hueFromId(id) {
   let h = 0;
-  for (let i = 0; i < String(id).length; i++) h = (h * 31 + String(id).charCodeAt(i)) % 360;
+  const s = String(id);
+  for (let i = 0; i < s.length; i++) h = (h * 31 + s.charCodeAt(i)) % 360;
   return h;
 }
 
@@ -38,6 +40,7 @@ export const AVATAR_EMOJIS = ["🙂","😎","🤖","🦄","🐼","🐯","🐸","
 export function emojiFromId(id) {
   if (!id) return "🙂";
   let sum = 0;
-  for (let i = 0; i < String(id).length; i++) sum += String(id).charCodeAt(i);
+  const s = String(id);
+  for (let i = 0; i < s.length; i++) sum += s.charCodeAt(i);
   return AVATAR_EMOJIS[sum % AVATAR_EMOJIS.length];
 }
