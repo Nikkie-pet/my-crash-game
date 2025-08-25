@@ -1,45 +1,19 @@
 import React, { useEffect, useState } from "react";
-
-let idSeq = 1;
-
-export default function Toasts() {
-  const [items, setItems] = useState([]);
-
-  useEffect(() => {
-    const onToast = (e) => {
-      const { message, type = "info", ttl = 3000 } = e.detail || {};
-      const id = idSeq++;
-      setItems((prev) => [...prev, { id, message, type }]);
-      setTimeout(() => {
-        setItems((prev) => prev.filter((t) => t.id !== id));
-      }, ttl);
-    };
-    window.addEventListener("cg-toast", onToast);
-    return () => window.removeEventListener("cg-toast", onToast);
-  }, []);
-
-  const bg = (t) =>
-    t === "success"
-      ? "bg-emerald-600"
-      : t === "error"
-      ? "bg-rose-600"
-      : "bg-slate-800";
-
+let push;
+export function toast(message, type="info", ms=2000){ push?.({message,type,ms}); }
+export default function Toasts(){
+  const [items,setItems]=useState([]);
+  useEffect(()=>{ push=(i)=>{ const id=Date.now()+Math.random(); setItems((p)=>[...p,{id,...i}]); setTimeout(()=>setItems((p)=>p.filter(x=>x.id!==id)), i.ms||2000); };},[]);
   return (
-    <div className="fixed bottom-4 right-4 flex flex-col gap-2 z-50">
-      {items.map((t) => (
-        <div
-          key={t.id}
-          className={`text-white text-sm px-3 py-2 rounded-lg shadow-lg ${bg(t.type)}`}
-        >
+    <div className="fixed top-3 right-3 z-[9999] space-y-2">
+      {items.map(t=>(
+        <div key={t.id} className={`px-3 py-2 rounded-lg shadow border text-sm
+          ${t.type==='success'?'bg-emerald-50 border-emerald-300 text-emerald-800':
+            t.type==='error'?'bg-red-50 border-red-300 text-red-800':
+            'bg-neutral-50 border-neutral-200 text-slate-800'}`}>
           {t.message}
         </div>
       ))}
     </div>
   );
-}
-
-// helper – můžeš volat odkudkoli
-export function toast(message, type = "info", ttl = 3000) {
-  window.dispatchEvent(new CustomEvent("cg-toast", { detail: { message, type, ttl } }));
 }
