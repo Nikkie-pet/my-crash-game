@@ -1,50 +1,54 @@
 // src/Game.jsx
 import React, { useEffect, useRef, useState } from "react";
 import { toast } from "./components/Toasts";
+import { getOrCreateUser } from "./lib/user";
 
 const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
 
 export default function Game() {
-  // Stav hry
+  // stav
   const [running, setRunning] = useState(false);
-  const [value, setValue] = useState(1.0);          // aktuální ×
-  const [target, setTarget] = useState(1.5);        // cílové × (jen číslo, už ne marker)
+  const [value, setValue] = useState(1.0);
+  const [target, setTarget] = useState(1.5);        // cíl (jen číslo – bez markeru na liště)
   const [maxTime, setMaxTime] = useState(8000);     // ms
-  const [maxMult, setMaxMult] = useState(4.5);      // × strop
+  const [maxMult, setMaxMult] = useState(4.5);      // max × dosažitelné v kole
   const [countdownMs, setCountdownMs] = useState(0);
   const [progress, setProgress] = useState(0);      // 0..1 průběh
   const [roundId, setRoundId] = useState(null);
 
-  // Poslední výsledek pro „zpětný pohled“
-  const [lastResult, setLastResult] = useState(null); // {value,target,diff,score,crashed,ts,roundId}
+  // poslední vlastní výsledek
+  const [lastResult, setLastResult] = useState(null); // {userId,name,value,target,diff,score,crashed,ts,roundId}
 
-  // Debug – životní známky
+  // souhrn celého kola z room (od všech hráčů)
+  const [roundSummary, setRoundSummary] = useState(null); // {roundId,target,expectedPlayers,results:[...]}
+
+  // debug
   const [heartbeat, setHeartbeat] = useState(0);
   const [lastTickAt, setLastTickAt] = useState(0);
 
-  // Refy
+  // refy
   const mutedRef = useRef(localStorage.getItem("muted") === "1");
-  const startAtRef = useRef(0);           // absolutní start v ms
-  const endAtRef = useRef(0);             // start + maxTime
+  const startAtRef = useRef(0);
+  const endAtRef = useRef(0);
   const cdownTimerRef = useRef(null);
   const rafRef = useRef(null);
   const fallbackTimerRef = useRef(null);
   const tickingGuardRef = useRef(0);
 
-  // Heartbeat
+  // heartbeat (pro jistotu animace žije)
   useEffect(() => {
     const hb = setInterval(() => setHeartbeat((n) => (n + 1) % 1_000_000), 500);
     return () => clearInterval(hb);
   }, []);
 
-  // Sync mute
+  // sync mute z App
   useEffect(() => {
     const onMute = (e) => { mutedRef.current = !!e.detail?.muted; };
     window.addEventListener("cg-mute-change", onMute);
     return () => window.removeEventListener("cg-mute-change", onMute);
   }, []);
 
-  // MP start kola (přichází sdílené parametry)
+  // start MP kola (sdílené parametry od Multiplayer.jsx)
   useEffect(() => {
     const onRound = (e) => {
       const p = e.detail || {};
@@ -61,6 +65,8 @@ export default function Game() {
       setValue(1.0);
       setProgress(0);
       setRoundId(p.seed || sa);
+      setLastResult(null);
+      setRoundSummary(null); // schovej starý souhrn
       beginCountdownTo(sa);
       toast(`Nové kolo – cíl ${t.toFixed(2)}×`, "info");
     };
@@ -68,7 +74,18 @@ export default function Game() {
     return () => window.removeEventListener("cg-mp-round", onRound);
   }, []);
 
-  // Klávesy
+  // příjem souhrnu kola (Multiplayer.jsx posílá cg-round-summary)
+  useEffect(() => {
+    const onSum = (e) => {
+      const d = e.detail || {};
+      if (!roundId || (d.roundId && d.roundId !== roundId)) return; // zobrazuj jen aktuální kolo
+      setRoundSummary(d);
+    };
+    window.addEventListener("cg-round-summary", onSum);
+    return () => window.removeEventListener("cg-round-summary", onSum);
+  }, [roundId]);
+
+  // klávesy (Space/Enter = start/stop)
   useEffect(() => {
     const onKey = (e) => {
       if (e.code === "Space" || e.code === "Enter") { e.preventDefault(); handleStartStop(); }
@@ -77,7 +94,7 @@ export default function Game() {
     return () => window.removeEventListener("keydown", onKey);
   }, [running, countdownMs]);
 
-  // Beep 3·2·1
+  // beep pro 3·2·1
   useEffect(() => {
     if (countdownMs <= 0) return;
     const secLeft = Math.ceil(countdownMs / 1000);
@@ -86,10 +103,10 @@ export default function Game() {
     }
   }, [countdownMs]);
 
-  // Úklid
+  // úklid
   useEffect(() => () => hardReset(), []);
 
-  // ==== Helpers ====
+  // ==== helpers ====
   const hardReset = () => {
     try { clearInterval(cdownTimerRef.current); } catch {}
     try { cancelAnimationFrame(rafRef.current); } catch {}
@@ -130,7 +147,7 @@ export default function Game() {
       rafRef.current = requestAnimationFrame(rafLoop);
     };
     rafRef.current = requestAnimationFrame(rafLoop);
-    // záložní interval
+    // fallback interval (pro jistotu)
     fallbackTimerRef.current = setInterval(() => {
       const now = performance.now ? performance.now() : Date.now();
       doTick(now);
@@ -156,17 +173,17 @@ export default function Game() {
       try { clearInterval(fallbackTimerRef.current); } catch {}
       rafRef.current = null;
       fallbackTimerRef.current = null;
-      // konec bez kliknutí = crash
+
       const finalV = 1.0 + (maxMult - 1.0);
       setValue(finalV);
-      finishRound(finalV, true);
+      finishRound(finalV, true); // nekliknuto = crash
     }
   };
 
   const handleStartStop = () => {
     if (countdownMs > 0) return;
     if (!running) {
-      // SOLO parametry – dosažitelný cíl
+      // SOLO kolo (náhodné, ale dosažitelný cíl)
       const mm = Number((3.8 + Math.random() * (5.2 - 3.8)).toFixed(2));
       const mt = 8000;
       const tMax = Math.max(1.10, mm - 0.05);
@@ -179,10 +196,12 @@ export default function Game() {
       setValue(1.0);
       setProgress(0);
       setRoundId(Date.now());
+      setLastResult(null);
+      setRoundSummary(null);
       beginCountdownTo(sa);
       toast(`Solo kolo – cíl ${t.toFixed(2)}×`, "info");
     } else {
-      // kliknutí = Stop
+      // STOP klik
       try { cancelAnimationFrame(rafRef.current); } catch {}
       try { clearInterval(fallbackTimerRef.current); } catch {}
       rafRef.current = null;
@@ -193,18 +212,33 @@ export default function Game() {
     }
   };
 
-  const finishRound = (finalValue, crashed) => {
+  const finishRound = async (finalValue, crashed) => {
+    const { id: userId } = getOrCreateUser();
+    const name = (localStorage.getItem("mp_name") || "Player").trim();
+    const room = (localStorage.getItem("mp_room") || "").toLowerCase().replace(/[^a-z0-9\-]/g, "");
+
     const v = Number(finalValue);
     const t = Number(target);
     const diff = Math.abs(v - t);
     const score = Math.max(0, Math.round(1000 - diff * 1000));
-    const payload = { name: (localStorage.getItem("mp_name") || "Player").trim(), value: v, target: t, diff, score, crashed, ts: Date.now(), roundId };
 
-    setLastResult(payload); // ← uložíme pro „zpětný pohled“
+    const payload = { userId, name, value: v, target: t, diff, score, crashed, ts: Date.now(), roundId };
+
+    // ulož a zveřejni lokálně (aby i single fungoval bez MP)
+    setLastResult(payload);
     window.dispatchEvent(new CustomEvent("cg-game-result", { detail: payload }));
 
-    if (!mutedRef.current) {
-      try { new Audio("data:audio/wav;base64,UklGRiQAAABXQVZFZm10IBAAAAABAAEAESsAACJWAAACABAAZGF0YQAAAAA=").play(); } catch {}
+    // spolehlivý fanout přes server (vidí všichni v room)
+    if (room) {
+      try {
+        await fetch("/api/round-result", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ room, result: payload }),
+        });
+      } catch (e) {
+        console.warn("POST /api/round-result failed", e);
+      }
     }
   };
 
@@ -212,7 +246,7 @@ export default function Game() {
   const secondsLabel =
     countdownMs > 0 ? `Start za ${(countdownMs / 1000).toFixed(1)} s` : running ? "Běží…" : "Připraveno";
 
-  // Pozice pro případné značky (0..1)
+  // pozice na liště
   const valuePos = clamp((value - 1.0) / Math.max(0.001, (maxMult - 1.0)), 0, 1);
   const lastValuePos = lastResult
     ? clamp((lastResult.value - 1.0) / Math.max(0.001, (maxMult - 1.0)), 0, 1)
@@ -234,7 +268,7 @@ export default function Game() {
         <div className="text-sm text-slate-500">{secondsLabel}</div>
       </div>
 
-      {/* Velká hodnota + cíl (číslo) */}
+      {/* velká hodnota + cíl (číslem) */}
       <div className="mt-4 flex items-end gap-4">
         <div className="text-5xl md:text-6xl font-extrabold tabular-nums tracking-tight">
           {value.toFixed(2)}×
@@ -245,28 +279,27 @@ export default function Game() {
         </div>
       </div>
 
-      {/* Lišta průběhu – bez target markeru */}
+      {/* průběhová lišta – bez target markeru; během běhu „spark“, po konci pin na místě kliku */}
       <div className="relative mt-5 h-4 rounded-full bg-neutral-100 dark:bg-slate-800 border border-neutral-200 dark:border-slate-700 overflow-hidden">
         {/* výplň */}
         <div
           className="absolute inset-y-0 left-0 bg-emerald-200/50 dark:bg-emerald-900/30 transition-[width] duration-100"
           style={{ width: `${progress * 100}%` }}
         />
-        {/* spark během běhu */}
+        {/* živý „spark“ */}
         {running && (
           <div
             className="absolute top-0 bottom-0 w-0.5 bg-emerald-600 transition-[left] duration-100"
             style={{ left: `${valuePos * 100}%` }}
           />
         )}
-        {/* stop marker – jen po skončení kola, ukazuje, kde ses zastavila */}
+        {/* pin posledního kliku */}
         {!running && lastResult && (
           <div
             className="absolute -top-1.5 w-0 h-0"
             style={{ left: `${lastValuePos * 100}%` }}
             title={`Zastaveno na ${lastResult.value.toFixed(2)}×`}
           >
-            {/* malý „špendlík“ */}
             <div className="relative -left-1">
               <div className="w-0 h-0 border-l-4 border-r-4 border-b-8 border-l-transparent border-r-transparent border-b-emerald-600" />
             </div>
@@ -279,7 +312,7 @@ export default function Game() {
         <span>{maxMult.toFixed(2)}×</span>
       </div>
 
-      {/* Ovládání */}
+      {/* ovládání */}
       <div className="mt-6">
         <button
           onClick={handleStartStop}
@@ -291,40 +324,64 @@ export default function Game() {
         </button>
       </div>
 
-      {/* Karta posledního výsledku */}
+      {/* moje karta výsledku */}
       {lastResult && (
         <div className="mt-5 p-4 rounded-xl bg-neutral-50 dark:bg-slate-800 border border-neutral-200 dark:border-slate-700 text-sm">
           <div className="flex flex-wrap gap-6">
-            <div>
-              <div className="text-xs text-slate-500">Zastaveno na</div>
-              <div className="font-semibold">{lastResult.value.toFixed(2)}×</div>
-            </div>
-            <div>
-              <div className="text-xs text-slate-500">Cíl</div>
-              <div className="font-semibold">{lastResult.target.toFixed(2)}×</div>
-            </div>
-            <div>
-              <div className="text-xs text-slate-500">Odchylka (Δ)</div>
-              <div className="font-semibold">{lastResult.diff.toFixed(2)}×</div>
-            </div>
-            <div>
-              <div className="text-xs text-slate-500">Skóre</div>
-              <div className="font-semibold">{lastResult.score}</div>
-            </div>
-            <div>
-              <div className="text-xs text-slate-500">Výsledek</div>
-              <div className={`font-semibold ${lastResult.crashed ? "text-red-600" : "text-emerald-600"}`}>
-                {lastResult.crashed ? "Crash (nekliknuto)" : "Stop (klik)"}
-              </div>
-            </div>
+            <div><div className="text-xs text-slate-500">Zastaveno na</div><div className="font-semibold">{lastResult.value.toFixed(2)}×</div></div>
+            <div><div className="text-xs text-slate-500">Cíl</div><div className="font-semibold">{lastResult.target.toFixed(2)}×</div></div>
+            <div><div className="text-xs text-slate-500">Δ</div><div className="font-semibold">{lastResult.diff.toFixed(2)}×</div></div>
+            <div><div className="text-xs text-slate-500">Skóre</div><div className="font-semibold">{lastResult.score}</div></div>
+            <div><div className="text-xs text-slate-500">Výsledek</div><div className={`font-semibold ${lastResult.crashed ? "text-red-600" : "text-emerald-600"}`}>{lastResult.crashed ? "Crash" : "Stop"}</div></div>
           </div>
-          <div className="mt-2 text-xs text-slate-500">
-            {new Date(lastResult.ts).toLocaleString()}
-          </div>
+          <div className="mt-2 text-xs text-slate-500">{new Date(lastResult.ts).toLocaleString()}</div>
         </div>
       )}
 
-      {/* Debug řádek (nechávám – pomáhá, ale klidně pak smažeme) */}
+      {/* souhrn kola všech hráčů (přijde z Multiplayer.jsx) */}
+      {roundSummary && roundSummary.results?.length > 0 && (
+        <div className="mt-5 p-4 rounded-xl bg-white/60 dark:bg-slate-800/60 border border-neutral-200 dark:border-slate-700">
+          <div className="flex items-center justify-between">
+            <h3 className="font-semibold">Výsledky kola</h3>
+            <div className="text-xs text-slate-500">
+              Cíl: {Number(roundSummary.target || target).toFixed(2)}× · Hráči: {roundSummary.results.length}
+              {typeof roundSummary.expectedPlayers === "number" ? ` / ${roundSummary.expectedPlayers}` : ""}
+            </div>
+          </div>
+          <div className="mt-2 overflow-x-auto">
+            <table className="min-w-full text-sm">
+              <thead>
+                <tr className="text-left text-slate-500">
+                  <th className="py-1 pr-4">Pořadí</th>
+                  <th className="py-1 pr-4">Hráč</th>
+                  <th className="py-1 pr-4">Skóre</th>
+                  <th className="py-1 pr-4">Hodnota</th>
+                  <th className="py-1 pr-4">Δ</th>
+                  <th className="py-1 pr-4">Důvod</th>
+                </tr>
+              </thead>
+              <tbody>
+                {roundSummary.results.map((r, idx) => {
+                  const me = (localStorage.getItem("mp_name") || "Player").trim() === r.name;
+                  return (
+                    <tr key={idx} className="border-t border-neutral-200 dark:border-slate-800">
+                      <td className="py-1 pr-4">{idx + 1}.</td>
+                      <td className={`py-1 pr-4 ${me ? "font-semibold" : ""}`}>{r.name}{me ? " (ty)" : ""}</td>
+                      <td className="py-1 pr-4 font-semibold">{r.score}</td>
+                      <td className="py-1 pr-4">{Number(r.value).toFixed(2)}×</td>
+                      <td className="py-1 pr-4">{Number(r.diff).toFixed(2)}×</td>
+                      <td className="py-1 pr-4">{r.crashed ? "Crash" : "Stop"}</td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+          <div className="mt-2 text-xs text-slate-500">Kolo: #{roundSummary.roundId || roundId}</div>
+        </div>
+      )}
+
+      {/* debug pruh (můžeš kdykoli odstranit) */}
       <div className="mt-4 text-xs text-slate-500">
         <div>Heartbeat: {heartbeat}</div>
         <div>Last tick: {lastTickAt ? new Date(lastTickAt).toLocaleTimeString() : "—"} ({lastTickAt || "—"})</div>
