@@ -1,4 +1,3 @@
-// src/components/Avatar.jsx
 import React from "react";
 import { initials, hueFromId, emojiFromId } from "../lib/user";
 

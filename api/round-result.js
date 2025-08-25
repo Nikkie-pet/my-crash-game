@@ -1,4 +1,3 @@
-// api/round-result.js
 import Pusher from "pusher";
 import crypto from "crypto";
 
@@ -18,15 +17,14 @@ const pusher = new Pusher({
   useTLS: true,
 });
 
-function stable(payload) {
-  // stejná struktura jako v /api/round-sign
+function stable(r) {
   return {
-    room: String(payload.room).toLowerCase().replace(/[^a-z0-9\-]/g, ""),
-    startAt: Number(payload.startAt),
-    maxTime: Number(payload.maxTime),
-    maxMult: Number(payload.maxMult),
-    target: Number(payload.target),
-    seed: Number(payload.seed),
+    room: String(r.room).toLowerCase().replace(/[^a-z0-9\-]/g, ""),
+    startAt: Number(r.startAt),
+    maxTime: Number(r.maxTime),
+    maxMult: Number(r.maxMult),
+    target: Number(r.target),
+    seed: Number(r.seed),
     ver: 1,
   };
 }
@@ -38,31 +36,28 @@ function hmac(payload) {
 
 export default async function handler(req, res) {
   if (req.method !== "POST") return res.status(405).json({ ok: false, error: "Method Not Allowed" });
-
   try {
-    const body = typeof req.body === "string" ? JSON.parse(req.body || "{}") : (req.body || {});
+    const chunks = [];
+    for await (const ch of req) chunks.push(ch);
+    const body = JSON.parse(Buffer.concat(chunks).toString("utf8") || "{}");
     const { room, result, round } = body || {};
     if (!room || !result || !round) return res.status(400).json({ ok: false, error: "Missing room/result/round" });
     if (!ROUND_SIGN_SECRET) return res.status(500).json({ ok: false, error: "Missing ROUND_SIGN_SECRET" });
 
     const channel = `presence-${String(room).toLowerCase().replace(/[^a-z0-9\-]/g, "")}`;
-
-    // 1) ověř podpis
     const norm = stable(round);
     const expectedSig = hmac(norm);
     if (!round.sig || round.sig !== expectedSig) {
       return res.status(403).json({ ok: false, error: "Invalid signature" });
     }
 
-    // 2) ověř časové okno výsledku
     const now = Date.now();
-    const startOk = now >= norm.startAt - 1000; // drobná tolerance
-    const endOk   = Number(result.ts) <= norm.startAt + norm.maxTime + 2500; // + grace 2.5 s
+    const startOk = now >= norm.startAt - 1000;
+    const endOk = Number(result.ts) <= norm.startAt + norm.maxTime + 2500;
     if (!startOk || !endOk) {
       return res.status(400).json({ ok: false, error: "Result outside allowed time window" });
     }
 
-    // 3) sanity hodnot
     const v = Number(result.value);
     const t = Number(norm.target);
     if (Number.isNaN(v) || v < 1 || v > 100) {
@@ -71,7 +66,6 @@ export default async function handler(req, res) {
     const diff = Math.abs(v - t);
     const score = Math.max(0, Math.round(1000 - diff * 1000));
 
-    // 4) push do room
     const payload = {
       userId: String(result.userId || ""),
       name: String(result.name || "Player"),

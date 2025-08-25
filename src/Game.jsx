@@ -1,4 +1,3 @@
-// src/Game.jsx
 import React, { useEffect, useRef, useState } from "react";
 import { toast } from "./components/Toasts";
 import { getOrCreateUser } from "./lib/user";
@@ -29,7 +28,6 @@ export default function Game() {
   const fallbackTimerRef = useRef(null);
   const tickingGuardRef = useRef(0);
 
-  // 🔸 držák serverem podepsaného kola
   const roundInfoRef = useRef(null); // { room, startAt, maxTime, maxMult, target, seed, sig }
 
   useEffect(() => {
@@ -43,7 +41,6 @@ export default function Game() {
     return () => window.removeEventListener("cg-mute-change", onMute);
   }, []);
 
-  // přijmi start MP kola (vč. podpisu)
   useEffect(() => {
     const onRound = (e) => {
       const p = e.detail || {};
@@ -53,7 +50,6 @@ export default function Game() {
       const t  = clamp(Number(p.target ?? 1.5), 1.10, tMax);
       const sa = Number(p.startAt ?? Date.now() + 2000);
 
-      // ulož podepsané parametry pro validaci výsledku
       const room = (localStorage.getItem("mp_room") || "").toLowerCase().replace(/[^a-z0-9\-]/g, "");
       roundInfoRef.current = {
         room, startAt: sa, maxTime: mt, maxMult: mm, target: t, seed: Number(p.seed || sa), sig: p.sig,
@@ -177,14 +173,13 @@ export default function Game() {
   const handleStartStop = () => {
     if (countdownMs > 0) return;
     if (!running) {
-      // SOLO kolo (bez podpisu – jen pro single trénink)
       const mm = Number((3.8 + Math.random() * (5.2 - 3.8)).toFixed(2));
       const mt = 8000;
       const tMax = Math.max(1.10, mm - 0.05);
       const t  = Number((1.10 + Math.random() * (tMax - 1.10)).toFixed(2));
       const sa = Date.now() + 3000;
 
-      roundInfoRef.current = null; // není MP podpis
+      roundInfoRef.current = null;
       setMaxMult(mm); setMaxTime(mt); setTarget(t);
       setValue(1.0); setProgress(0);
       setRoundId(Date.now()); setLastResult(null); setRoundSummary(null);
@@ -215,7 +210,6 @@ export default function Game() {
     setLastResult(payload);
     window.dispatchEvent(new CustomEvent("cg-game-result", { detail: payload }));
 
-    // Pokud máme MP podepsané kolo → pošli spolu s parametry (server ověří)
     if (room && roundInfoRef.current?.sig) {
       try {
         await fetch("/api/round-result", {

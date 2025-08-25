@@ -1,4 +1,3 @@
-// src/lib/user.js
 export function getOrCreateUser() {
   let id = localStorage.getItem("mp_uid");
   if (!id) {

@@ -1,8 +1,7 @@
-// src/Multiplayer.jsx
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { createPusher } from "./realtime/pusherClient";
 import { toast } from "./components/Toasts";
-import Avatar from "./components/Avatar";
+import Avatar from "./components/Avatar.jsx";
 import { getOrCreateUser, setUserName, shortId } from "./lib/user";
 
 function Btn({ children, className = "", ...props }) {
@@ -174,7 +173,6 @@ export default function Multiplayer() {
       });
 
       ch.bind("client-round-start", (payload) => {
-        // kontrola, že startuje hostitel
         const current = [];
         ch.members.each((m) => current.push((m.info?.name || "player").trim()));
         const currentHost = current.sort()[0];
@@ -265,7 +263,7 @@ export default function Multiplayer() {
     const sharedTarget = Number((1.10 + Math.random() * (targetMax - 1.10)).toFixed(2));
     const seed = Date.now();
 
-    // 💡 vyžádej od serveru podpis
+    // požádej server o podpis parametrů kola
     let sig = null;
     try {
       const r = await fetch("/api/round-sign", {
@@ -353,7 +351,6 @@ export default function Multiplayer() {
             </div>
           </div>
 
-          {/* hráči */}
           <div className="mt-4">
             <div className="text-sm text-slate-500 mb-1">Hráči v místnosti:</div>
             <div className="flex flex-wrap gap-3">
@@ -372,7 +369,6 @@ export default function Multiplayer() {
             </div>
           </div>
 
-          {/* poslední výsledky */}
           <div className="mt-6">
             <div className="flex items-baseline justify-between">
               <h3 className="font-semibold">Last round</h3>

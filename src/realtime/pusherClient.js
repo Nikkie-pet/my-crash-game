@@ -1,4 +1,5 @@
 import Pusher from "pusher-js";
+
 export function createPusher(username="Player"){
   const key = import.meta.env.VITE_PUSHER_KEY;
   const cluster = import.meta.env.VITE_PUSHER_CLUSTER || "eu";
@@ -8,11 +9,11 @@ export function createPusher(username="Player"){
     cluster,
     channelAuthorization: {
       endpoint: authEndpoint,
-      transport: "ajax", // pro Vercel funguje spolehlivěji než 'fetch'
+      transport: "ajax", // Vercel-friendly
     },
     userAuthentication: { endpoint: authEndpoint, transport: "ajax" },
   });
-  // přepošli jméno pro presence
+  // Propagace jména pro presence
   p.config.auth = { headers: { "X-Username": encodeURIComponent(username) } };
   return p;
 }
