@@ -1,0 +1,44 @@
+// api/round-sign.js
+import crypto from "crypto";
+
+const SECRET = process.env.ROUND_SIGN_SECRET;
+
+function hmac(payload) {
+  const json = JSON.stringify(payload);
+  return crypto.createHmac("sha256", SECRET).update(json).digest("hex");
+}
+
+export default async function handler(req, res) {
+  if (req.method !== "POST") return res.status(405).json({ ok: false, error: "Method Not Allowed" });
+  if (!SECRET) return res.status(500).json({ ok: false, error: "Missing ROUND_SIGN_SECRET" });
+
+  try {
+    const body = typeof req.body === "string" ? JSON.parse(req.body || "{}") : (req.body || {});
+    const { room, startAt, maxTime, maxMult, target, seed } = body || {};
+    if (!room || !startAt || !maxTime || !maxMult || !target || !seed) {
+      return res.status(400).json({ ok: false, error: "Missing fields" });
+    }
+
+    // normalizace
+    const payload = {
+      room: String(room).toLowerCase().replace(/[^a-z0-9\-]/g, ""),
+      startAt: Number(startAt),
+      maxTime: Number(maxTime),
+      maxMult: Number(maxMult),
+      target: Number(target),
+      seed: Number(seed),
+      ver: 1,
+    };
+
+    // základní sanity guard (start nejpozději za 30s)
+    if (payload.startAt < Date.now() - 1000 || payload.startAt > Date.now() + 30_000) {
+      return res.status(400).json({ ok: false, error: "startAt out of allowed window" });
+    }
+
+    const sig = hmac(payload);
+    return res.status(200).json({ ok: true, sig, payload });
+  } catch (e) {
+    console.error("[/api/round-sign] error:", e);
+    return res.status(500).json({ ok: false, error: e?.message || "Internal Error" });
+  }
+}

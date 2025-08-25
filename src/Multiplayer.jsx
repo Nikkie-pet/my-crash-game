@@ -2,6 +2,8 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { createPusher } from "./realtime/pusherClient";
 import { toast } from "./components/Toasts";
+import Avatar from "./components/Avatar";
+import { getOrCreateUser, setUserName, shortId } from "./lib/user";
 
 function Btn({ children, className = "", ...props }) {
   return (
@@ -18,8 +20,9 @@ function Btn({ children, className = "", ...props }) {
 }
 
 export default function Multiplayer() {
-  const [username, setUsername] = useState(() => (localStorage.getItem("mp_name") || "Player").trim());
-  const [room, setRoom] = useState(() =>
+  const me = getOrCreateUser();
+  const [username, setUsername] = useState(me.name);
+  const [room, setRoom] = useState(
     (localStorage.getItem("mp_room") || "").toLowerCase().replace(/[^a-z0-9\-]/g, "")
   );
 
@@ -39,20 +42,59 @@ export default function Multiplayer() {
 
   const lockUntilRef = useRef(0);
 
-  const hostName = useMemo(() => (members.length ? [...members].sort()[0] : null), [members]);
+  const hostName = useMemo(
+    () => (members.length ? [...members].sort()[0] : null),
+    [members]
+  );
   const isHost = useMemo(() => !!hostName && hostName === username, [hostName, username]);
 
   useEffect(() => () => { try { pusher?.disconnect(); } catch {} }, [pusher]);
 
+  const getRealtimeMembers = () => {
+    const arr = [];
+    try { channel?.members?.each((m) => arr.push((m.info?.name || "player").trim())); } catch {}
+    return arr.length ? arr : members;
+  };
+
+  const publishSummary = (resultsArr) => {
+    const expected = getRealtimeMembers().length;
+    const sorted = [...resultsArr].sort((a, b) => b.score - a.score);
+    const target = sorted.length ? Number(sorted[0].target) : undefined;
+    const round = sorted.length ? (sorted[0].roundId || lastRoundId) : lastRoundId;
+
+    window.dispatchEvent(
+      new CustomEvent("cg-round-summary", {
+        detail: {
+          roundId: round,
+          target,
+          expectedPlayers: expected,
+          results: sorted.map((r) => ({
+            userId: r.userId,
+            name: r.name,
+            value: Number(r.value),
+            target: Number(r.target),
+            diff: Math.abs(Number(r.value) - Number(r.target)),
+            score: Number(r.score),
+            crashed: !!r.crashed,
+            ts: r.ts,
+          })),
+        },
+      })
+    );
+  };
+
   useEffect(() => {
     const onGameResult = (e) => {
-      const result = e.detail || {};
-      setLastRoundId(result.roundId || result.ts || Date.now());
+      const r = e.detail || {};
+      setLastRoundId(r.roundId || r.ts || Date.now());
       setLastResults((prev) => {
-        const filtered = (prev || []).filter((r) => r.name !== result.name);
-        return [...filtered, result].sort((a, b) => b.score - a.score);
+        const next = [...(prev || []).filter((x) => !(x.userId === r.userId && x.roundId === r.roundId)), r];
+        publishSummary(next);
+        return next.sort((a, b) => b.score - a.score);
       });
-      if (channel) { try { channel.trigger("client-round-result", result); } catch {} }
+      if (channel) {
+        try { channel.trigger("client-round-result", r); } catch {}
+      }
     };
     window.addEventListener("cg-game-result", onGameResult);
     return () => window.removeEventListener("cg-game-result", onGameResult);
@@ -60,21 +102,20 @@ export default function Multiplayer() {
 
   const joinRoom = async () => {
     setError("");
-    const cleanName = username.replace(/\s+/g, " ").trim();
+    const cleanName = setUserName(username);
     const cleanRoom = room.toLowerCase().replace(/[^a-z0-9\-]/g, "");
-
     if (!cleanRoom) return setError("Zadej název místnosti.");
     if (!cleanName) return setError("Zadej jméno.");
+
+    localStorage.setItem("mp_room", cleanRoom);
+    setUsername(cleanName);
+    setRoom(cleanRoom);
 
     const key = import.meta.env.VITE_PUSHER_KEY;
     const cluster = import.meta.env.VITE_PUSHER_CLUSTER;
     if (!key || !cluster) return setError("Chybí VITE_PUSHER_KEY / VITE_PUSHER_CLUSTER (ENV).");
 
     setJoining(true);
-    localStorage.setItem("mp_name", cleanName);
-    localStorage.setItem("mp_room", cleanRoom);
-    setUsername(cleanName);
-    setRoom(cleanRoom);
 
     try {
       const p = createPusher(cleanName);
@@ -118,44 +159,57 @@ export default function Multiplayer() {
 
       ch.bind("pusher:error", (err) => {
         console.error("[MP] pusher:error", err);
-        setError("Pusher error – zkontroluj Client events v Pusher App Settings.");
+        setError("Pusher error – fallback máme přes server, ale zkontroluj nastavení.");
         toast("Pusher error", "error");
       });
 
-      ch.bind("client-ready", ({ name, ready }) => {
+      ch.bind("client-ready", ({ userId, name, ready }) => {
+        const n = (name || "player").trim();
         setReadyNames((prev) => {
-          const has = prev.includes(name);
-          if (ready && !has) return [...prev, name];
-          if (!ready && has) return prev.filter((n) => n !== name);
+          const has = prev.includes(n);
+          if (ready && !has) return [...prev, n];
+          if (!ready && has) return prev.filter((x) => x !== n);
           return prev;
         });
       });
 
       ch.bind("client-round-start", (payload) => {
-        try {
-          const current = [];
-          ch.members.each((m) => current.push((m.info?.name || "player").trim()));
-          const currentHost = current.sort()[0];
-          if (payload?.from !== currentHost) return;
+        // kontrola, že startuje hostitel
+        const current = [];
+        ch.members.each((m) => current.push((m.info?.name || "player").trim()));
+        const currentHost = current.sort()[0];
+        if (payload?.from !== currentHost) return;
 
-          setReadyNames([]);
-          setIAmReady(false);
+        setReadyNames([]);
+        setIAmReady(false);
+        setLastRoundId(payload.seed || payload.startAt || Date.now());
+        setLastResults([]);
+        window.dispatchEvent(new CustomEvent("cg-mp-round", { detail: payload }));
 
-          setLastRoundId(payload.seed || payload.startAt || Date.now());
-          setLastResults([]);
-          window.dispatchEvent(new CustomEvent("cg-mp-round", { detail: payload }));
-        } catch (e) {
-          console.error("[MP] client-round-start handler error:", e);
-        }
+        const safetyDelay = (Number(payload.maxTime) || 8000) + 2500;
+        setTimeout(() => publishSummary(lastResults), safetyDelay);
       });
 
-      ch.bind("client-round-result", (result) => {
-        setLastRoundId((prev) => prev ?? result.roundId ?? result.ts ?? Date.now());
+      ch.bind("server-round-result", (r) => {
+        setLastRoundId((prev) => prev ?? r.roundId ?? r.ts ?? Date.now());
         setLastResults((prev) => {
-          const filtered = (prev || []).filter((r) => r.name !== result.name);
-          return [...filtered, result].sort((a, b) => b.score - a.score);
+          const next = [...(prev || []).filter((x) => !(x.userId === r.userId && x.ts === r.ts)), r]
+            .sort((a, b) => b.score - a.score);
+          publishSummary(next);
+          return next;
         });
       });
+
+      ch.bind("client-round-result", (r) => {
+        setLastRoundId((prev) => prev ?? r.roundId ?? r.ts ?? Date.now());
+        setLastResults((prev) => {
+          const next = [...(prev || []).filter((x) => !(x.userId === r.userId && x.ts === r.ts)), r]
+            .sort((a, b) => b.score - a.score);
+          publishSummary(next);
+          return next;
+        });
+      });
+
     } catch (e) {
       console.error("[MP] createPusher failed", e);
       setError(`Nepodařilo se inicializovat Pusher: ${e?.message || e}`);
@@ -182,22 +236,17 @@ export default function Multiplayer() {
       if (!next && has) return prev.filter((n) => n !== username);
       return prev;
     });
-    channel.trigger("client-ready", { name: username, ready: next });
+    channel.trigger("client-ready", { userId: me.id, name: username, ready: next });
     if (next) toast("Připraven/a ✅", "success");
   };
 
-  const getRealtimeMembers = () => {
-    const arr = [];
-    try { channel?.members?.each((m) => arr.push((m.info?.name || "player").trim())); } catch {}
-    return arr;
-  };
   const areAllRealtimeReady = () => {
     const rt = getRealtimeMembers();
     if (rt.length < 2) return false;
     return rt.every((n) => readyNames.includes(n));
   };
 
-  const startSynchronizedRound = () => {
+  const startSynchronizedRound = async () => {
     if (!channel) return setError("Channel není připraven.");
     if (!subscribed) return setError("Ještě nejsi plně připojen/á (subscription).");
 
@@ -209,22 +258,31 @@ export default function Multiplayer() {
     if (!areAllRealtimeReady()) return setError("Start až když jsou všichni READY.");
     if (Date.now() < lockUntilRef.current) return;
 
-    // 🔹 Jasně dosažitelné parametry
     const startAt = Date.now() + 3500;
-    const maxTime = 8000; // 8 s – svižnější
-    const maxMult = Number((3.8 + Math.random() * (5.2 - 3.8)).toFixed(2)); // strop ~4–5×
+    const maxTime = 8000;
+    const maxMult = Number((3.8 + Math.random() * (5.2 - 3.8)).toFixed(2));
     const targetMax = Math.max(1.10, maxMult - 0.05);
-    const sharedTarget = Number((1.10 + Math.random() * (targetMax - 1.10)).toFixed(2)); // ≤ maxMult-0.05
+    const sharedTarget = Number((1.10 + Math.random() * (targetMax - 1.10)).toFixed(2));
+    const seed = Date.now();
 
-    const payload = {
-      seed: Date.now(),
-      startAt,
-      from: username,
-      room,
-      maxMult,
-      maxTime,
-      target: sharedTarget,
-    };
+    // 💡 vyžádej od serveru podpis
+    let sig = null;
+    try {
+      const r = await fetch("/api/round-sign", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ room, startAt, maxTime, maxMult, target: sharedTarget, seed }),
+      }).then((x) => x.json());
+      if (!r?.ok || !r.sig) throw new Error(r?.error || "sign failed");
+      sig = r.sig;
+    } catch (e) {
+      console.error("round-sign failed", e);
+      setError("Nepodařilo se podepsat kolo (server).");
+      toast("Server sign selhal", "error");
+      return;
+    }
+
+    const payload = { seed, startAt, from: username, room, maxMult, maxTime, target: sharedTarget, sig };
 
     lockUntilRef.current = startAt + 500;
     setLastRoundId(payload.seed);
@@ -241,14 +299,7 @@ export default function Multiplayer() {
     window.dispatchEvent(new CustomEvent("cg-mp-round", { detail: payload }));
   };
 
-  const canStart = joined && subscribed && members.length >= 2 && isHost && areAllRealtimeReady();
-
-  let startHint = "";
-  if (!joined) startHint = "Nejsi připojen/á v místnosti.";
-  else if (!subscribed) startHint = "Čekám na dokončení připojení…";
-  else if (members.length < 2) startHint = "Čekám alespoň na 2 hráče v místnosti.";
-  else if (!areAllRealtimeReady()) startHint = "Start až když jsou všichni READY.";
-  else if (!isHost) startHint = `Start spouští hostitel (${hostName || "—"}).`;
+  const canStart = joined && subscribed && getRealtimeMembers().length >= 2 && isHost && areAllRealtimeReady();
 
   return (
     <section className="rounded-2xl bg-white shadow-soft border border-neutral-200 p-6 dark:bg-slate-900 dark:border-slate-800">
@@ -261,7 +312,8 @@ export default function Multiplayer() {
             <input
               className="px-3 py-2 rounded-lg border border-neutral-300 dark:bg-slate-900 dark:border-slate-700"
               value={username}
-              onChange={(e) => setUsername(e.target.value.replace(/\s+/g, " ").trim().slice(0, 24))}
+              onChange={(e) => setUsername(e.target.value)}
+              onBlur={(e) => setUsername(setUserName(e.target.value))}
               placeholder="Tvoje přezdívka"
             />
           </div>
@@ -285,42 +337,42 @@ export default function Multiplayer() {
             <div>
               <div className="text-sm text-slate-500">Místnost:</div>
               <div className="font-semibold">{room}</div>
-              <div className="text-xs text-slate-500 mt-1">Hostitel: <strong>{hostName || "—"}</strong></div>
+              <div className="text-xs text-slate-500 mt-1">Hostitel: <strong>{(members.length ? [...members].sort()[0] : "—")}</strong></div>
               <div className="text-xs text-slate-500 mt-1">
-                Players: {members.length} · Ready: {readyNames.length}/{members.length} · isHost:{String(isHost)}
+                Players: {getRealtimeMembers().length} · Ready: {readyNames.length}/{getRealtimeMembers().length}
               </div>
             </div>
             <div className="flex items-center gap-2">
               <Btn onClick={toggleReady} className={iAmReady ? "bg-emerald-500 text-white border-emerald-500" : ""}>
                 {iAmReady ? "✓ READY" : "I'm ready"}
               </Btn>
-              <Btn onClick={startSynchronizedRound} disabled={!canStart}
-                className={!canStart ? "opacity-60 cursor-not-allowed" : ""}>
+              <Btn onClick={startSynchronizedRound} disabled={!canStart} className={!canStart ? "opacity-60 cursor-not-allowed" : ""}>
                 Start round (host)
               </Btn>
               <Btn onClick={leaveRoom}>Leave</Btn>
             </div>
           </div>
 
-          <div className="mt-2 text-xs text-slate-500">{!canStart && startHint}</div>
-
+          {/* hráči */}
           <div className="mt-4">
             <div className="text-sm text-slate-500 mb-1">Hráči v místnosti:</div>
-            <div className="flex flex-wrap gap-2">
-              {members.map((m, i) => {
-                const rdy = readyNames.includes(m);
+            <div className="flex flex-wrap gap-3">
+              {getRealtimeMembers().map((n, i) => {
+                const rdy = readyNames.includes(n);
+                const isMe = n === username;
                 return (
-                  <span key={i}
-                    className={`px-3 py-1 rounded-full border ${rdy
-                      ? "bg-emerald-50 border-emerald-300 text-emerald-700 dark:bg-emerald-900/30 dark:border-emerald-700 dark:text-emerald-300"
-                      : "bg-neutral-100 dark:bg-slate-800 border-neutral-200 dark:border-slate-700"}`}>
-                    {m}{rdy ? " ✓" : ""}
+                  <span key={i} className={`inline-flex items-center gap-2 px-3 py-1 rounded-full border ${rdy
+                    ? "bg-emerald-50 border-emerald-300 text-emerald-700 dark:bg-emerald-900/30 dark:border-emerald-700 dark:text-emerald-300"
+                    : "bg-neutral-100 dark:bg-slate-800 border-neutral-200 dark:border-slate-700"}`}>
+                    <Avatar name={n} userId={isMe ? me.id : n} size={22} />
+                    <span>{n}{isMe ? ` (#${shortId(me.id)})` : ""}{rdy ? " ✓" : ""}</span>
                   </span>
                 );
               })}
             </div>
           </div>
 
+          {/* poslední výsledky */}
           <div className="mt-6">
             <div className="flex items-baseline justify-between">
               <h3 className="font-semibold">Last round</h3>
@@ -335,15 +387,26 @@ export default function Multiplayer() {
                       <th className="py-1 pr-4">Skóre</th>
                       <th className="py-1 pr-4">Hodnota</th>
                       <th className="py-1 pr-4">Cíl</th>
+                      <th className="py-1 pr-4">Δ</th>
+                      <th className="py-1 pr-4">Důvod</th>
                     </tr>
                   </thead>
                   <tbody>
                     {lastResults.map((r, idx) => (
                       <tr key={idx} className="border-t border-neutral-200 dark:border-slate-800">
-                        <td className="py-1 pr-4">{r.name}</td>
+                        <td className="py-1 pr-4">
+                          <div className="flex items-center gap-2">
+                            <Avatar name={r.name} userId={r.userId || r.name} size={20} />
+                            <span className={r.userId === me.id ? "font-semibold" : ""}>
+                              {r.name}{r.userId ? ` (#${shortId(r.userId)})` : ""}{r.userId === me.id ? " (ty)" : ""}
+                            </span>
+                          </div>
+                        </td>
                         <td className="py-1 pr-4 font-semibold">{r.score}</td>
                         <td className="py-1 pr-4">{Number(r.value).toFixed(2)}×</td>
                         <td className="py-1 pr-4">{Number(r.target).toFixed(2)}×</td>
+                        <td className="py-1 pr-4">{Math.abs(Number(r.value)-Number(r.target)).toFixed(2)}×</td>
+                        <td className="py-1 pr-4">{r.crashed ? "Crash" : "Stop"}</td>
                       </tr>
                     ))}
                   </tbody>

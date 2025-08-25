@@ -1,45 +1,39 @@
 // src/realtime/pusherClient.js
 import Pusher from "pusher-js";
 
-/**
- * Debug logy Pusheru (zapni jen při ladění).
- * Až bude vše OK, klidně nastav na false nebo řádek smaž.
- */
+// pro ladění – klidně vypni po odladění
 Pusher.logToConsole = true;
 
-/**
- * Vytvoří Pusher klienta pro frontend.
- * Vyžaduje:
- *  - VITE_PUSHER_KEY (public key z Pusheru)
- *  - VITE_PUSHER_CLUSTER (např. "eu")
- *  - volitelně VITE_PUSHER_AUTH_URL (pro lokální vývoj můžeš použít prod URL)
- *
- * Pokud VITE_PUSHER_AUTH_URL není nastavené, použije relativní "/api/pusher-auth"
- * (to funguje na Vercelu i v `vercel dev`).
- */
 export function createPusher(username = "anon") {
   const key = import.meta.env.VITE_PUSHER_KEY;
   const cluster = import.meta.env.VITE_PUSHER_CLUSTER;
 
+  // pokud vyvíjíš s `vercel dev`, tenhle řádek v .env.local neměj
+  // pokud jedeš bez `vercel dev`, můžeš nastavit prod URL v .env.local
+  const authEndpoint = import.meta.env.VITE_PUSHER_AUTH_URL || "/api/pusher-auth";
+
+  console.log("[PUSHER] init →", { key, cluster, authEndpoint, username });
+
   if (!key || !cluster) {
-    throw new Error("Missing VITE_PUSHER_KEY or VITE_PUSHER_CLUSTER");
+    throw new Error("Chybí VITE_PUSHER_KEY nebo VITE_PUSHER_CLUSTER. Zkontroluj .env.local a restartuj dev server.");
   }
 
-  // Lokálně můžeš přesměrovat autorizaci na produkční endpoint,
-  // aby Presence fungoval i bez `vercel dev`.
-  const authEndpoint =
-    import.meta.env.VITE_PUSHER_AUTH_URL || "/api/pusher-auth";
-
-  // Pozn.: pusher-js v8+ používá `channelAuthorization`
   const p = new Pusher(key, {
     cluster,
     forceTLS: true,
+    enabledTransports: ["ws", "wss"],
     channelAuthorization: {
       endpoint: authEndpoint,
-      transport: "ajax",        // pošle form-urlencoded
-      params: { username },     // dorazí na server (api/pusher-auth) jako pole
+      transport: "ajax",      // ✅ Pusher podporuje 'ajax' (XHR) a 'jsonp'
+      params: { username },   // dorazí do /api/pusher-auth jako form-urlencoded
     },
-    enabledTransports: ["ws", "wss"],
+  });
+
+  p.connection.bind("state_change", (st) => {
+    console.log("[PUSHER] state:", st.previous, "→", st.current);
+  });
+  p.connection.bind("error", (err) => {
+    console.error("[PUSHER] connection error:", err);
   });
 
   return p;
