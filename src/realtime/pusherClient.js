@@ -1,19 +1,25 @@
+// src/realtime/pusherClient.js
 import Pusher from "pusher-js";
+import { getOrCreateUser } from "../lib/user";
 
-export function createPusher(username="Player"){
-  const key = import.meta.env.VITE_PUSHER_KEY;
-  const cluster = import.meta.env.VITE_PUSHER_CLUSTER || "eu";
-  const authEndpoint = import.meta.env.VITE_PUSHER_AUTH_URL || "/api/pusher-auth";
-  if(!key) throw new Error("Missing VITE_PUSHER_KEY");
-  const p = new Pusher(key, {
-    cluster,
-    channelAuthorization: {
-      endpoint: authEndpoint,
-      transport: "ajax", // Vercel-friendly
+const key = import.meta.env.VITE_PUSHER_KEY;
+const cluster = import.meta.env.VITE_PUSHER_CLUSTER || "eu";
+const authEndpoint = import.meta.env.VITE_PUSHER_AUTH_URL || "/api/pusher-auth";
+
+const user = getOrCreateUser();
+
+export const pusher = new Pusher(key, {
+  cluster,
+  forceTLS: true,
+  channelAuthorization: {
+    endpoint: authEndpoint,     // <<< relativní URL
+    transport: "ajax",          // robustnější než "fetch" v některých prostředích
+    params: {
+      username: user.name,
+      user_id: user.id,
     },
-    userAuthentication: { endpoint: authEndpoint, transport: "ajax" },
-  });
-  // Propagace jména pro presence
-  p.config.auth = { headers: { "X-Username": encodeURIComponent(username) } };
-  return p;
-}
+    headers: {
+      "X-App-Version": "web-1",
+    },
+  },
+});
