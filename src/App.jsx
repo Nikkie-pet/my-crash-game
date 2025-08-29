@@ -51,9 +51,9 @@ export default function App() {
       </header>
 
       <main className="max-w-5xl mx-auto px-4 py-6 grid gap-6">
-        <Game />
-        <Multiplayer />
-        <Leaderboard />
+        <Game lang={lang} />
+        <Multiplayer lang={lang} />
+        <Leaderboard lang={lang} />
         <Rules lang={lang} />
       </main>
 

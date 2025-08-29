@@ -1,10 +1,12 @@
+// src/Game.jsx
 import React, { useEffect, useRef, useState } from "react";
 import { toast } from "./components/Toasts";
 import { getOrCreateUser } from "./lib/user";
+import { t } from "./components/LanguageSwitch";
 
 const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
 
-export default function Game() {
+export default function Game({ lang = "cs" }) {
   const [running, setRunning] = useState(false);
   const [value, setValue] = useState(1.0);
   const [target, setTarget] = useState(1.5);
@@ -28,14 +30,16 @@ export default function Game() {
   const fallbackTimerRef = useRef(null);
   const tickingGuardRef = useRef(0);
 
-  // sdílené info pro validaci MP kola (podpis od serveru)
-  const roundInfoRef = useRef(null); // { room, startAt, maxTime, maxMult, target, seed, sig }
+  // pro MP validaci: { room, startAt, maxTime, maxMult, target, seed, sig }
+  const roundInfoRef = useRef(null);
 
+  // malý heartbeat pro „živost“ UI/debug
   useEffect(() => {
     const hb = setInterval(() => setHeartbeat((n) => (n + 1) % 1_000_000), 500);
     return () => clearInterval(hb);
   }, []);
 
+  // posluchač na změnu mute (globální tlačítko v App.jsx)
   useEffect(() => {
     const onMute = (e) => { mutedRef.current = !!e.detail?.muted; };
     window.addEventListener("cg-mute-change", onMute);
@@ -49,31 +53,31 @@ export default function Game() {
       const mm = clamp(Number(p.maxMult ?? 4.5), 1.05, 50.0);
       const mt = clamp(Number(p.maxTime ?? 8000), 3000, 60000);
       const tMax = Math.max(1.10, mm - 0.05);
-      const t  = clamp(Number(p.target ?? 1.5), 1.10, tMax);
+      const tg  = clamp(Number(p.target ?? 1.5), 1.10, tMax);
       const sa = Number(p.startAt ?? Date.now() + 2000);
-
       const room = (localStorage.getItem("mp_room") || "").toLowerCase().replace(/[^a-z0-9\-]/g, "");
+
       roundInfoRef.current = {
-        room, startAt: sa, maxTime: mt, maxMult: mm, target: t, seed: Number(p.seed || sa), sig: p.sig,
+        room, startAt: sa, maxTime: mt, maxMult: mm, target: tg, seed: Number(p.seed || sa), sig: p.sig,
       };
 
       hardReset();
       setMaxMult(mm);
       setMaxTime(mt);
-      setTarget(t);
+      setTarget(tg);
       setValue(1.0);
       setProgress(0);
       setRoundId(p.seed || sa);
       setLastResult(null);
       setRoundSummary(null);
       beginCountdownTo(sa);
-      toast(`Nové kolo – cíl ${t.toFixed(2)}×`, "info");
+      toast(`${t(lang, "title")} – ${t(lang, "goalTitle")}: ${tg.toFixed(2)}×`, "info");
     };
     window.addEventListener("cg-mp-round", onRound);
     return () => window.removeEventListener("cg-mp-round", onRound);
-  }, []);
+  }, [lang]);
 
-  // Multiplayer: sumarizace výsledků kola
+  // Multiplayer: přijmi sumarizaci výsledků kola
   useEffect(() => {
     const onSum = (e) => {
       const d = e.detail || {};
@@ -84,6 +88,7 @@ export default function Game() {
     return () => window.removeEventListener("cg-round-summary", onSum);
   }, [roundId]);
 
+  // Space/Enter = start/stop
   useEffect(() => {
     const onKey = (e) => {
       if (e.code === "Space" || e.code === "Enter") { e.preventDefault(); handleStartStop(); }
@@ -92,6 +97,7 @@ export default function Game() {
     return () => window.removeEventListener("keydown", onKey);
   }, [running, countdownMs]);
 
+  // drobný beep během odpočtu (pokud není mute)
   useEffect(() => {
     if (countdownMs <= 0) return;
     const secLeft = Math.ceil(countdownMs / 1000);
@@ -100,6 +106,7 @@ export default function Game() {
     }
   }, [countdownMs]);
 
+  // úklid při odpojení komponenty
   useEffect(() => () => hardReset(), []);
 
   const hardReset = () => {
@@ -135,12 +142,15 @@ export default function Game() {
     setValue(1.0);
     setProgress(0);
     setCountdownMs(0);
+
     const rafLoop = () => {
       const now = performance.now ? performance.now() : Date.now();
       doTick(now);
       rafRef.current = requestAnimationFrame(rafLoop);
     };
     rafRef.current = requestAnimationFrame(rafLoop);
+
+    // bezpečnostní fallback, kdyby stránka šetřila FPS
     fallbackTimerRef.current = setInterval(() => {
       const now = performance.now ? performance.now() : Date.now();
       doTick(now);
@@ -149,16 +159,16 @@ export default function Game() {
 
   const doTick = (nowLike) => {
     const stamp = Math.floor(Number(nowLike));
-    if (tickingGuardRef.current === stamp) return;
+    if (tickingGuardRef.current === stamp) return; // max 1× za ms
     tickingGuardRef.current = stamp;
 
     const nowMs = Date.now();
     setLastTickAt(nowMs);
     if (!startAtRef.current || !endAtRef.current) return;
 
-    const t = clamp((nowMs - startAtRef.current) / (maxTime || 1), 0, 1);
-    setProgress(t);
-    setValue(1.0 + (maxMult - 1.0) * t);
+    const tprog = clamp((nowMs - startAtRef.current) / (maxTime || 1), 0, 1);
+    setProgress(tprog);
+    setValue(1.0 + (maxMult - 1.0) * tprog);
 
     if (nowMs >= endAtRef.current) {
       setRunning(false);
@@ -175,20 +185,23 @@ export default function Game() {
 
   const handleStartStop = () => {
     if (countdownMs > 0) return;
+
     if (!running) {
+      // SOLO kolo: náhodně vygeneruj parametry a odstartuj za 3 s
       const mm = Number((3.8 + Math.random() * (5.2 - 3.8)).toFixed(2));
       const mt = 8000;
       const tMax = Math.max(1.10, mm - 0.05);
-      const t  = Number((1.10 + Math.random() * (tMax - 1.10)).toFixed(2));
+      const tg  = Number((1.10 + Math.random() * (tMax - 1.10)).toFixed(2));
       const sa = Date.now() + 3000;
 
       roundInfoRef.current = null; // solo kolo
-      setMaxMult(mm); setMaxTime(mt); setTarget(t);
+      setMaxMult(mm); setMaxTime(mt); setTarget(tg);
       setValue(1.0); setProgress(0);
       setRoundId(Date.now()); setLastResult(null); setRoundSummary(null);
       beginCountdownTo(sa);
-      toast(`Solo kolo – cíl ${t.toFixed(2)}×`, "info");
+      toast(`${t(lang, "title")} – ${t(lang, "goalTitle")}: ${tg.toFixed(2)}×`, "info");
     } else {
+      // STOP (ruční zastavení)
       try { cancelAnimationFrame(rafRef.current); } catch {}
       try { clearInterval(fallbackTimerRef.current); } catch {}
       rafRef.current = null; fallbackTimerRef.current = null;
@@ -204,17 +217,17 @@ export default function Game() {
     const room = (localStorage.getItem("mp_room") || "").toLowerCase().replace(/[^a-z0-9\-]/g, "");
 
     const v = Number(finalValue);
-    const t = Number(target);
-    const diff = Math.abs(v - t);
+    const tg = Number(target);
+    const diff = Math.abs(v - tg);
     const score = Math.max(0, Math.round(1000 - diff * 1000));
 
-    const payload = { userId, name, value: v, target: t, diff, score, crashed, ts: Date.now(), roundId };
+    const payload = { userId, name, value: v, target: tg, diff, score, crashed, ts: Date.now(), roundId };
 
     setLastResult(payload);
-    // událost pro Multiplayer (tabulka výsledků)
+    // Notifikuj Multiplayer vrstvy v UI
     window.dispatchEvent(new CustomEvent("cg-game-result", { detail: payload }));
 
-    // MP server – validace a broadcast
+    // MP server – validace/broadcast (pokud běží v MP kole)
     if (room && roundInfoRef.current?.sig) {
       try {
         await fetch("/api/round-result", {
@@ -239,7 +252,7 @@ export default function Game() {
       }
     }
 
-    // Leaderboard (Supabase přes serverové API)
+    // Leaderboard → přes Vercel API do Supabase
     try {
       await fetch("/api/score-submit", {
         method: "POST",
@@ -249,7 +262,7 @@ export default function Game() {
           name,
           score,
           value: v,
-          target: t,
+          target: tg,
           diff,
           crashed,
           room,
@@ -262,7 +275,11 @@ export default function Game() {
   };
 
   const secondsLabel =
-    countdownMs > 0 ? `Start za ${(countdownMs / 1000).toFixed(1)} s` : running ? "Běží…" : "Připraveno";
+    countdownMs > 0
+      ? (lang === "cs" ? `Start za ${(countdownMs / 1000).toFixed(1)} s` : `Starts in ${(countdownMs / 1000).toFixed(1)} s`)
+      : running
+      ? (lang === "cs" ? "Běží…" : "Running…")
+      : (lang === "cs" ? "Připraveno" : "Ready");
 
   const valuePos = clamp((value - 1.0) / Math.max(0.001, (maxMult - 1.0)), 0, 1);
   const lastValuePos = lastResult
@@ -271,6 +288,7 @@ export default function Game() {
 
   return (
     <section className="relative rounded-2xl bg-white shadow-soft border border-neutral-200 p-6 dark:bg-slate-900 dark:border-slate-800 overflow-hidden">
+      {/* Overlay odpočtu */}
       {countdownMs > 0 && (
         <div className="absolute inset-0 bg-black/40 backdrop-blur-[1px] flex items-center justify-center z-20">
           <div className="text-white text-7xl md:text-8xl font-extrabold drop-shadow">
@@ -280,7 +298,7 @@ export default function Game() {
       )}
 
       <div className="flex items-center justify-between">
-        <h2 className="text-lg font-semibold">Crash Aim</h2>
+        <h2 className="text-lg font-semibold">{t(lang, "title")}</h2>
         <div className="text-sm text-slate-500">{secondsLabel}</div>
       </div>
 
@@ -289,18 +307,29 @@ export default function Game() {
           {value.toFixed(2)}×
         </div>
         <div className="text-slate-500">
-          <div className="text-xs">Cíl</div>
+          <div className="text-xs">{lang === "cs" ? "Cíl" : "Target"}</div>
           <div className="text-xl font-semibold">{target.toFixed(2)}×</div>
         </div>
       </div>
 
+      {/* Progres „čára“ + značky */}
       <div className="relative mt-5 h-4 rounded-full bg-neutral-100 dark:bg-slate-800 border border-neutral-200 dark:border-slate-700 overflow-hidden">
-        <div className="absolute inset-y-0 left-0 bg-emerald-200/50 dark:bg-emerald-900/30 transition-[width] duration-100" style={{ width: `${progress * 100}%` }} />
+        <div
+          className="absolute inset-y-0 left-0 bg-emerald-200/50 dark:bg-emerald-900/30 transition-[width] duration-100"
+          style={{ width: `${progress * 100}%` }}
+        />
         {running && (
-          <div className="absolute top-0 bottom-0 w-0.5 bg-emerald-600 transition-[left] duration-100" style={{ left: `${valuePos * 100}%` }} />
+          <div
+            className="absolute top-0 bottom-0 w-0.5 bg-emerald-600 transition-[left] duration-100"
+            style={{ left: `${valuePos * 100}%` }}
+          />
         )}
         {!running && lastResult && (
-          <div className="absolute -top-1.5 w-0 h-0" style={{ left: `${lastValuePos * 100}%` }} title={`Zastaveno na ${lastResult.value.toFixed(2)}×`}>
+          <div
+            className="absolute -top-1.5 w-0 h-0"
+            style={{ left: `${lastValuePos * 100}%` }}
+            title={`${lang === "cs" ? "Zastaveno na" : "Stopped at"} ${lastResult.value.toFixed(2)}×`}
+          >
             <div className="relative -left-1">
               <div className="w-0 h-0 border-l-4 border-r-4 border-b-8 border-l-transparent border-r-transparent border-b-emerald-600" />
             </div>
@@ -318,31 +347,54 @@ export default function Game() {
           onClick={handleStartStop}
           disabled={countdownMs > 0}
           className="px-5 py-3 rounded-xl bg-emerald-600 text-white hover:bg-emerald-700 disabled:opacity-50"
-          title={countdownMs > 0 ? "Běží odpočet – počkej na start" : ""}
+          title={countdownMs > 0 ? (lang === "cs" ? "Běží odpočet – počkej na start" : "Countdown running – wait to start") : ""}
         >
-          {running ? "Stop" : countdownMs > 0 ? `Start za ${(countdownMs / 1000).toFixed(1)} s` : "Start"}
+          {running
+            ? (lang === "cs" ? "Stop" : "Stop")
+            : countdownMs > 0
+            ? (lang === "cs" ? `Start za ${(countdownMs / 1000).toFixed(1)} s` : `Starts in ${(countdownMs / 1000).toFixed(1)} s`)
+            : (lang === "cs" ? "Start" : "Start")}
         </button>
       </div>
 
+      {/* Poslední výsledek (solo i MP) */}
       {lastResult && (
         <div className="mt-5 p-4 rounded-xl bg-neutral-50 dark:bg-slate-800 border border-neutral-200 dark:border-slate-700 text-sm">
           <div className="flex flex-wrap gap-6">
-            <div><div className="text-xs text-slate-500">Zastaveno na</div><div className="font-semibold">{lastResult.value.toFixed(2)}×</div></div>
-            <div><div className="text-xs text-slate-500">Cíl</div><div className="font-semibold">{lastResult.target.toFixed(2)}×</div></div>
-            <div><div className="text-xs text-slate-500">Δ</div><div className="font-semibold">{lastResult.diff.toFixed(2)}×</div></div>
-            <div><div className="text-xs text-slate-500">Skóre</div><div className="font-semibold">{lastResult.score}</div></div>
-            <div><div className="text-xs text-slate-500">Výsledek</div><div className={`font-semibold ${lastResult.crashed ? "text-red-600" : "text-emerald-600"}`}>{lastResult.crashed ? "Crash" : "Stop"}</div></div>
+            <div>
+              <div className="text-xs text-slate-500">{lang === "cs" ? "Zastaveno na" : "Stopped at"}</div>
+              <div className="font-semibold">{lastResult.value.toFixed(2)}×</div>
+            </div>
+            <div>
+              <div className="text-xs text-slate-500">{lang === "cs" ? "Cíl" : "Target"}</div>
+              <div className="font-semibold">{lastResult.target.toFixed(2)}×</div>
+            </div>
+            <div>
+              <div className="text-xs text-slate-500">Δ</div>
+              <div className="font-semibold">{lastResult.diff.toFixed(2)}×</div>
+            </div>
+            <div>
+              <div className="text-xs text-slate-500">{lang === "cs" ? "Skóre" : "Score"}</div>
+              <div className="font-semibold">{lastResult.score}</div>
+            </div>
+            <div>
+              <div className="text-xs text-slate-500">{lang === "cs" ? "Výsledek" : "Result"}</div>
+              <div className={`font-semibold ${lastResult.crashed ? "text-red-600" : "text-emerald-600"}`}>
+                {lastResult.crashed ? "Crash" : "Stop"}
+              </div>
+            </div>
           </div>
           <div className="mt-2 text-xs text-slate-500">{new Date(lastResult.ts).toLocaleString()}</div>
         </div>
       )}
 
+      {/* Souhrn MP kola (tabulka všech hráčů) */}
       {roundSummary && roundSummary.results?.length > 0 && (
         <div className="mt-5 p-4 rounded-xl bg-white/60 dark:bg-slate-800/60 border border-neutral-200 dark:border-slate-700">
           <div className="flex items-center justify-between">
-            <h3 className="font-semibold">Výsledky kola</h3>
+            <h3 className="font-semibold">{lang === "cs" ? "Výsledky kola" : "Round results"}</h3>
             <div className="text-xs text-slate-500">
-              Cíl: {Number(roundSummary.target || target).toFixed(2)}× · Hráči: {roundSummary.results.length}
+              {lang === "cs" ? "Cíl" : "Target"}: {Number(roundSummary.target || target).toFixed(2)}× · {lang === "cs" ? "Hráči" : "Players"}: {roundSummary.results.length}
               {typeof roundSummary.expectedPlayers === "number" ? ` / ${roundSummary.expectedPlayers}` : ""}
             </div>
           </div>
@@ -350,12 +402,12 @@ export default function Game() {
             <table className="min-w-full text-sm">
               <thead>
                 <tr className="text-left text-slate-500">
-                  <th className="py-1 pr-4">Pořadí</th>
-                  <th className="py-1 pr-4">Hráč</th>
-                  <th className="py-1 pr-4">Skóre</th>
-                  <th className="py-1 pr-4">Hodnota</th>
+                  <th className="py-1 pr-4">{lang === "cs" ? "Pořadí" : "Rank"}</th>
+                  <th className="py-1 pr-4">{lang === "cs" ? "Hráč" : "Player"}</th>
+                  <th className="py-1 pr-4">{lang === "cs" ? "Skóre" : "Score"}</th>
+                  <th className="py-1 pr-4">{lang === "cs" ? "Hodnota" : "Value"}</th>
                   <th className="py-1 pr-4">Δ</th>
-                  <th className="py-1 pr-4">Důvod</th>
+                  <th className="py-1 pr-4">{lang === "cs" ? "Důvod" : "Reason"}</th>
                 </tr>
               </thead>
               <tbody>
@@ -372,10 +424,11 @@ export default function Game() {
               </tbody>
             </table>
           </div>
-          <div className="mt-2 text-xs text-slate-500">Kolo: #{roundSummary.roundId || roundId}</div>
+          <div className="mt-2 text-xs text-slate-500">{lang === "cs" ? "Kolo" : "Round"}: #{roundSummary.roundId || roundId}</div>
         </div>
       )}
 
+      {/* Debug řádek (můžeš kdykoli skrýt) */}
       <div className="mt-4 text-xs text-slate-500">
         <div>Heartbeat: {heartbeat}</div>
         <div>Last tick: {lastTickAt ? new Date(lastTickAt).toLocaleTimeString() : "—"} ({lastTickAt || "—"})</div>
