@@ -28,6 +28,7 @@ export default function Game() {
   const fallbackTimerRef = useRef(null);
   const tickingGuardRef = useRef(0);
 
+  // sdílené info pro validaci MP kola (podpis od serveru)
   const roundInfoRef = useRef(null); // { room, startAt, maxTime, maxMult, target, seed, sig }
 
   useEffect(() => {
@@ -41,6 +42,7 @@ export default function Game() {
     return () => window.removeEventListener("cg-mute-change", onMute);
   }, []);
 
+  // Multiplayer: příjem parametrů kola od hostitele
   useEffect(() => {
     const onRound = (e) => {
       const p = e.detail || {};
@@ -71,6 +73,7 @@ export default function Game() {
     return () => window.removeEventListener("cg-mp-round", onRound);
   }, []);
 
+  // Multiplayer: sumarizace výsledků kola
   useEffect(() => {
     const onSum = (e) => {
       const d = e.detail || {};
@@ -179,7 +182,7 @@ export default function Game() {
       const t  = Number((1.10 + Math.random() * (tMax - 1.10)).toFixed(2));
       const sa = Date.now() + 3000;
 
-      roundInfoRef.current = null;
+      roundInfoRef.current = null; // solo kolo
       setMaxMult(mm); setMaxTime(mt); setTarget(t);
       setValue(1.0); setProgress(0);
       setRoundId(Date.now()); setLastResult(null); setRoundSummary(null);
@@ -208,8 +211,10 @@ export default function Game() {
     const payload = { userId, name, value: v, target: t, diff, score, crashed, ts: Date.now(), roundId };
 
     setLastResult(payload);
+    // událost pro Multiplayer (tabulka výsledků)
     window.dispatchEvent(new CustomEvent("cg-game-result", { detail: payload }));
 
+    // MP server – validace a broadcast
     if (room && roundInfoRef.current?.sig) {
       try {
         await fetch("/api/round-result", {
@@ -232,6 +237,27 @@ export default function Game() {
       } catch (e) {
         console.warn("POST /api/round-result failed", e);
       }
+    }
+
+    // Leaderboard (Supabase přes serverové API)
+    try {
+      await fetch("/api/score-submit", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          userId,
+          name,
+          score,
+          value: v,
+          target: t,
+          diff,
+          crashed,
+          room,
+          roundId
+        }),
+      });
+    } catch (e) {
+      console.warn("POST /api/score-submit failed", e);
     }
   };
 
