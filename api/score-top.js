@@ -1,44 +1,62 @@
+// /api/score-top.js  (ESM)
 import { createClient } from "@supabase/supabase-js";
 
-const url = process.env.SUPABASE_URL;
-const srv = process.env.SUPABASE_SERVICE_ROLE_KEY;
-const supabase = url && srv ? createClient(url, srv) : null;
+const { SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY } = process.env;
+
+const supabase =
+  SUPABASE_URL && SUPABASE_SERVICE_ROLE_KEY
+    ? createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY)
+    : null;
+
+function lowerBoundForScope(scope) {
+  const now = new Date();
+  switch ((scope || "day").toLowerCase()) {
+    case "all":
+      return null;
+    case "month":
+      return new Date(now.getTime() - 30 * 24 * 3600 * 1000);
+    case "week":
+      return new Date(now.getTime() - 7 * 24 * 3600 * 1000);
+    case "day":
+    default:
+      return new Date(now.getTime() - 24 * 3600 * 1000);
+  }
+}
 
 export default async function handler(req, res) {
   if (req.method !== "GET") return res.status(405).json({ ok: false, error: "Method Not Allowed" });
-  if (!supabase) return res.status(500).json({ ok: false, error: "Supabase not configured" });
+  if (!supabase) return res.status(500).json({ ok: false, error: "Server not configured" });
 
   try {
-    const urlObj = new URL(req.url, "http://x");
-    const scope = urlObj.searchParams.get("scope") || "all"; // all | month | week | day
-    const limit = Math.min(100, Math.max(10, Number(urlObj.searchParams.get("limit") || 25)));
+    const url = new URL(req.url, `http://${req.headers.host}`);
+    const scope = url.searchParams.get("scope") || "day";
+    const limit = Math.max(1, Math.min(100, Number(url.searchParams.get("limit") || 25)));
+    const room = url.searchParams.get("room"); // volitelné: ?room=alpha-team (jen MP)
+    const onlyMp = url.searchParams.get("onlyMp") === "1"; // ?onlyMp=1 → pouze záznamy s room != null
 
-    let fromDate = null;
-    const now = new Date();
-
-    if (scope === "month") {
-      fromDate = new Date(now.getFullYear(), now.getMonth(), 1);
-    } else if (scope === "week") {
-      const day = now.getDay() || 7; // Po=1 … Ne=7
-      fromDate = new Date(now); fromDate.setDate(now.getDate() - (day - 1)); fromDate.setHours(0,0,0,0);
-    } else if (scope === "day") {
-      fromDate = new Date(now.getFullYear(), now.getMonth(), now.getDate());
-    }
-
-    let query = supabase
+    let q = supabase
       .from("scores")
-      .select("user_id,name,score,value,target,diff,crashed,room,round_id,created_at")
+      .select("user_id,name,score,value,target,diff,crashed,created_at,room,round_id")
       .order("score", { ascending: false })
       .limit(limit);
 
-    if (fromDate) query = query.gte("created_at", fromDate.toISOString());
+    // filtr času
+    const lb = lowerBoundForScope(scope);
+    if (lb) q = q.gte("created_at", lb.toISOString());
 
-    const { data, error } = await query;
+    // filtr room
+    if (room) {
+      q = q.eq("room", room.toLowerCase());
+    } else if (onlyMp) {
+      q = q.not("room", "is", null);
+    }
+
+    const { data, error } = await q;
     if (error) throw error;
 
     return res.status(200).json({ ok: true, items: data || [] });
   } catch (e) {
-    console.error("[/api/score-top] error:", e);
+    console.error("[score-top] error", e);
     return res.status(500).json({ ok: false, error: e?.message || "Internal Error" });
   }
 }

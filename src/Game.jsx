@@ -33,20 +33,20 @@ export default function Game({ lang = "cs" }) {
   // pro MP validaci: { room, startAt, maxTime, maxMult, target, seed, sig }
   const roundInfoRef = useRef(null);
 
-  // malý heartbeat pro „živost“ UI/debug
+  // Heartbeat – jen pro debug UI
   useEffect(() => {
     const hb = setInterval(() => setHeartbeat((n) => (n + 1) % 1_000_000), 500);
     return () => clearInterval(hb);
   }, []);
 
-  // posluchač na změnu mute (globální tlačítko v App.jsx)
+  // Sync mute z App.jsx (globální přepínač)
   useEffect(() => {
     const onMute = (e) => { mutedRef.current = !!e.detail?.muted; };
     window.addEventListener("cg-mute-change", onMute);
     return () => window.removeEventListener("cg-mute-change", onMute);
   }, []);
 
-  // Multiplayer: příjem parametrů kola od hostitele
+  // Multiplayer: start kola od hostitele / serveru
   useEffect(() => {
     const onRound = (e) => {
       const p = e.detail || {};
@@ -77,7 +77,7 @@ export default function Game({ lang = "cs" }) {
     return () => window.removeEventListener("cg-mp-round", onRound);
   }, [lang]);
 
-  // Multiplayer: přijmi sumarizaci výsledků kola
+  // Multiplayer: souhrn výsledků kola
   useEffect(() => {
     const onSum = (e) => {
       const d = e.detail || {};
@@ -88,7 +88,7 @@ export default function Game({ lang = "cs" }) {
     return () => window.removeEventListener("cg-round-summary", onSum);
   }, [roundId]);
 
-  // Space/Enter = start/stop
+  // Space/Enter → Start/Stop
   useEffect(() => {
     const onKey = (e) => {
       if (e.code === "Space" || e.code === "Enter") { e.preventDefault(); handleStartStop(); }
@@ -97,7 +97,7 @@ export default function Game({ lang = "cs" }) {
     return () => window.removeEventListener("keydown", onKey);
   }, [running, countdownMs]);
 
-  // drobný beep během odpočtu (pokud není mute)
+  // „tik“ během odpočtu (beep)
   useEffect(() => {
     if (countdownMs <= 0) return;
     const secLeft = Math.ceil(countdownMs / 1000);
@@ -106,7 +106,7 @@ export default function Game({ lang = "cs" }) {
     }
   }, [countdownMs]);
 
-  // úklid při odpojení komponenty
+  // cleanup
   useEffect(() => () => hardReset(), []);
 
   const hardReset = () => {
@@ -150,7 +150,7 @@ export default function Game({ lang = "cs" }) {
     };
     rafRef.current = requestAnimationFrame(rafLoop);
 
-    // bezpečnostní fallback, kdyby stránka šetřila FPS
+    // fallback
     fallbackTimerRef.current = setInterval(() => {
       const now = performance.now ? performance.now() : Date.now();
       doTick(now);
@@ -159,7 +159,7 @@ export default function Game({ lang = "cs" }) {
 
   const doTick = (nowLike) => {
     const stamp = Math.floor(Number(nowLike));
-    if (tickingGuardRef.current === stamp) return; // max 1× za ms
+    if (tickingGuardRef.current === stamp) return; // max 1×/ms
     tickingGuardRef.current = stamp;
 
     const nowMs = Date.now();
@@ -180,6 +180,8 @@ export default function Game({ lang = "cs" }) {
       const finalV = 1.0 + (maxMult - 1.0);
       setValue(finalV);
       finishRound(finalV, true);
+      // oznám konec – hostitel podle toho odpálí /api/round-summary
+      window.dispatchEvent(new CustomEvent("cg-round-ended", { detail: { roundId } }));
     }
   };
 
@@ -187,7 +189,7 @@ export default function Game({ lang = "cs" }) {
     if (countdownMs > 0) return;
 
     if (!running) {
-      // SOLO kolo: náhodně vygeneruj parametry a odstartuj za 3 s
+      // SOLO fallback – náhodné parametry + start za 3 s
       const mm = Number((3.8 + Math.random() * (5.2 - 3.8)).toFixed(2));
       const mt = 8000;
       const tMax = Math.max(1.10, mm - 0.05);
@@ -201,7 +203,7 @@ export default function Game({ lang = "cs" }) {
       beginCountdownTo(sa);
       toast(`${t(lang, "title")} – ${t(lang, "goalTitle")}: ${tg.toFixed(2)}×`, "info");
     } else {
-      // STOP (ruční zastavení)
+      // STOP ručně
       try { cancelAnimationFrame(rafRef.current); } catch {}
       try { clearInterval(fallbackTimerRef.current); } catch {}
       rafRef.current = null; fallbackTimerRef.current = null;
@@ -224,10 +226,10 @@ export default function Game({ lang = "cs" }) {
     const payload = { userId, name, value: v, target: tg, diff, score, crashed, ts: Date.now(), roundId };
 
     setLastResult(payload);
-    // Notifikuj Multiplayer vrstvy v UI
+    // Notifikace pro MP hostitele (sběr mapy výsledků ve fallbacku)
     window.dispatchEvent(new CustomEvent("cg-game-result", { detail: payload }));
 
-    // MP server – validace/broadcast (pokud běží v MP kole)
+    // MP server – validace/broadcast (jen když běží MP kolo)
     if (room && roundInfoRef.current?.sig) {
       try {
         await fetch("/api/round-result", {
@@ -252,7 +254,7 @@ export default function Game({ lang = "cs" }) {
       }
     }
 
-    // Leaderboard → přes Vercel API do Supabase
+    // Leaderboard (solo i MP) – volitelně
     try {
       await fetch("/api/score-submit", {
         method: "POST",
@@ -357,7 +359,7 @@ export default function Game({ lang = "cs" }) {
         </button>
       </div>
 
-      {/* Poslední výsledek (solo i MP) */}
+      {/* Poslední výsledek */}
       {lastResult && (
         <div className="mt-5 p-4 rounded-xl bg-neutral-50 dark:bg-slate-800 border border-neutral-200 dark:border-slate-700 text-sm">
           <div className="flex flex-wrap gap-6">
@@ -388,7 +390,7 @@ export default function Game({ lang = "cs" }) {
         </div>
       )}
 
-      {/* Souhrn MP kola (tabulka všech hráčů) */}
+      {/* Souhrn MP kola */}
       {roundSummary && roundSummary.results?.length > 0 && (
         <div className="mt-5 p-4 rounded-xl bg-white/60 dark:bg-slate-800/60 border border-neutral-200 dark:border-slate-700">
           <div className="flex items-center justify-between">
@@ -428,7 +430,7 @@ export default function Game({ lang = "cs" }) {
         </div>
       )}
 
-      {/* Debug řádek (můžeš kdykoli skrýt) */}
+      {/* Debug */}
       <div className="mt-4 text-xs text-slate-500">
         <div>Heartbeat: {heartbeat}</div>
         <div>Last tick: {lastTickAt ? new Date(lastTickAt).toLocaleTimeString() : "—"} ({lastTickAt || "—"})</div>
