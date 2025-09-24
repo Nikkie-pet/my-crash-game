@@ -3,7 +3,7 @@ import React, { useEffect, useMemo, useRef, useState } from "react";
 import { t } from "./components/LanguageSwitch";
 import Avatar from "./components/Avatar";
 import { getOrCreateUser } from "./lib/user";
-import { pusher, ensurePresence } from "./realtime/pusherClient";
+import { pusher, ensurePresence } from "./realtime/pusherClient.js";
 
 /**
  * Poznámky:
