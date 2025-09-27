@@ -1,0 +1,14 @@
+{
+  "name": "my-crash-game-server",
+  "version": "1.0.0",
+  "private": true,
+  "scripts": {
+    "dev": "node server_socket.js",
+    "start": "node server_socket.js"
+  },
+  "dependencies": {
+    "cors": "^2.8.5",
+    "express": "^4.19.2",
+    "socket.io": "^4.7.5"
+  }
+}

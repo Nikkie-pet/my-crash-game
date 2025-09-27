@@ -1,0 +1,54 @@
+<!doctype html>
+<html lang="cs">
+<head>
+  <meta charset="utf-8">
+  <title>my-crash-game – demo</title>
+  <script src="https://cdn.socket.io/4.7.5/socket.io.min.js"></script>
+  <style>
+    body { font-family: system-ui, sans-serif; padding: 16px; max-width: 700px; margin: 0 auto; }
+    button { padding: 8px 12px; margin-right: 8px; }
+    pre { background:#f6f8fa; padding:8px; border-radius:8px; white-space:pre-wrap; }
+    .row{ margin:10px 0; }
+  </style>
+</head>
+<body>
+  <h1>my-crash-game – demo</h1>
+
+  <div class="row">
+    Lobby ID: <input id="lobbyId" value="dev-lobby-1">
+    <button id="join">Připojit</button>
+    <button id="ready">Ready</button>
+    <button id="manual">Start (ručně)</button>
+  </div>
+
+  <pre id="log"></pre>
+
+  <script>
+    const SERVER_URL = "http://localhost:3001";
+    const s = io(SERVER_URL, { transports: ["websocket"] });
+    const logEl = document.getElementById('log');
+    const lobbyIdEl = document.getElementById('lobbyId');
+
+    const log = (x) => { logEl.textContent += x + "\n"; };
+
+    document.getElementById('join').onclick = () => {
+      s.emit('joinLobby', { lobbyId: lobbyIdEl.value.trim() });
+      log("emit joinLobby");
+    };
+    document.getElementById('ready').onclick = () => {
+      s.emit('player:ready', { lobbyId: lobbyIdEl.value.trim() });
+      log("emit player:ready");
+    };
+    document.getElementById('manual').onclick = () => {
+      s.emit('req:start', { lobbyId: lobbyIdEl.value.trim() });
+      log("emit req:start");
+    };
+
+    s.on('connect', () => log('connected ' + s.id));
+    s.on('lobby:update', (snap) => log('lobby:update ' + JSON.stringify(snap)));
+    s.on('game:countdown', (p) => log('COUNTDOWN startAt=' + p.startAt));
+    s.on('game:start', (p) => log('GAME START ' + JSON.stringify(p)));
+    s.on('disconnect', () => log('disconnected'));
+  </script>
+</body>
+</html>

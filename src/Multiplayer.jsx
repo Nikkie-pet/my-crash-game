@@ -1,371 +1,263 @@
 // src/Multiplayer.jsx
-import React, { useEffect, useMemo, useRef, useState } from "react";
-import { t } from "./components/LanguageSwitch";
-import Avatar from "./components/Avatar";
+import React, { useEffect, useMemo, useState } from "react";
 import { getOrCreateUser } from "./lib/user";
-import { pusher, ensurePresence } from "./realtime/pusherClient.js";
+import Avatar from "./components/Avatar";
+import { pusher, ensurePresence } from "./realtime/pusherClient";
+import { t } from "./components/LanguageSwitch";
 
-/**
- * Poznámky:
- * - Vyžaduje funkční /api/pusher-auth (server) + Vercel ENV.
- * - Události pro Game.jsx:
- *    - "cg-mp-round"           → spustí kolo se sdílenými parametry
- *    - "cg-round-summary"      → zobrazí tabulku výsledků kola
- *    - "cg-game-result"        → zachytáváme u hostitele a skládáme souhrn
- */
+function normRoom(s) {
+  return (s || "").toLowerCase().trim().replace(/[^a-z0-9\-]/g, "");
+}
 
 export default function Multiplayer({ lang = "cs" }) {
-  const user = useMemo(() => getOrCreateUser(), []);
-  const [room, setRoom] = useState(() => (localStorage.getItem("mp_room") || "").toLowerCase());
-  const [name, setName] = useState(() => localStorage.getItem("mp_name") || user.name || "Player");
-  const [joined, setJoined] = useState(false);
-  const [isHost, setIsHost] = useState(false);
-  const [players, setPlayers] = useState([]); // {id,name}…
+  const me = getOrCreateUser();
+  const [name, setName] = useState(me.name || "Player");
+  const [roomInput, setRoomInput] = useState(localStorage.getItem("mp_room") || "");
+  const room = useMemo(() => normRoom(roomInput), [roomInput]);
 
-  const [allReady, setAllReady] = useState(false);
-  const [iAmReady, setIAmReady] = useState(false);
-  const readinessRef = useRef({}); // userId -> bool
+  const [channel, setChannel] = useState(null);
+  const [members, setMembers] = useState([]); // {id, name}
+  const [ready, setReady] = useState(false);
+  const [hostId, setHostId] = useState(null);
+  const [connecting, setConnecting] = useState(false);
+  const [startBusy, setStartBusy] = useState(false);
+  const [debugMsg, setDebugMsg] = useState("");
 
-  const [roundOngoing, setRoundOngoing] = useState(false);
-  const currentRoundRef = useRef(null); // {seed,startAt,maxTime,maxMult,target,sig}
+  const iAmHost = hostId === me.id;
+  const readyCount = members.filter(m => m.ready).length;
+  const playerCount = members.length;
 
-  // Pusher kanály
-  const presenceRef = useRef(null);               // presence-room-<room>
-  const controlChannelRef = useRef(null);         // private-room-<room>-control
-  const resultsChannelRef = useRef(null);         // private-room-<room>-results
+  // Ulož jméno & room do LS pro Game.jsx i další relog
+  useEffect(() => {
+    localStorage.setItem("mp_name", name);
+    localStorage.setItem("mp_room", room);
+  }, [name, room]);
 
-  // pomocný nonce pro podpis
-  const randomSeed = () => Math.floor(1e12 + Math.random() * 9e12);
-
-  // Připojení do room (presence)
-  const joinRoom = async () => {
-    const r = (room || "").toLowerCase().replace(/[^a-z0-9\-]/g, "");
-    const nm = (name || "Player").trim().slice(0, 24);
-    if (!r) return alert(lang === "cs" ? "Zadej název místnosti" : "Enter room name");
-
-    // persist lokálně
-    localStorage.setItem("mp_room", r);
-    localStorage.setItem("mp_name", nm);
-
+  // Připojení k presence kanálu
+  const join = async () => {
+    if (!room) return alert("Zadej název místnosti (povolené znaky: a-z 0-9 -)");
+    setConnecting(true);
     try {
-      const presence = await ensurePresence(`presence-room-${r}`, { id: user.id, name: nm });
-      presenceRef.current = presence;
+      const ch = await ensurePresence(`presence-room-${room}`);
+      setChannel(ch);
+      setDebugMsg("Subscribed to presence channel.");
 
-      // seznam členů
-      const rebuild = () => {
-        const mem = presenceRef.current?.members?.members || {};
-        const arr = Object.keys(mem).map((k) => ({ id: k, name: mem[k].info?.name || "Player" }));
-        arr.sort((a, b) => a.name.localeCompare(b.name));
-        setPlayers(arr);
-        // všichni ready?
-        const rdy = arr.length > 0 && arr.every((p) => readinessRef.current[p.id]);
-        setAllReady(rdy);
-      };
+      // po úspěšné sub: registrace členů
+      const list = [];
+      ch.members.each((m) => {
+        list.push({ id: m.id, name: m.info?.name || "Player", ready: !!m.info?.ready });
+      });
+      list.sort((a,b)=>a.id.localeCompare(b.id));
+      setMembers(list);
 
-      presence.bind("pusher:subscription_succeeded", rebuild);
-      presence.bind("pusher:member_added", rebuild);
-      presence.bind("pusher:member_removed", (m) => {
-        delete readinessRef.current[m.id];
-        rebuild();
+      // host = lexikograficky první id v místnosti
+      setHostId(list[0]?.id);
+
+      // Bindování: někdo se přidá
+      ch.bind("pusher:member_added", (m) => {
+        setMembers((prev) => {
+          const next = prev.some(x => x.id === m.id) ? prev : [...prev, { id: m.id, name: m.info?.name || "Player", ready: !!m.info?.ready }];
+          next.sort((a,b)=>a.id.localeCompare(b.id));
+          setHostId(next[0]?.id);
+          return [...next];
+        });
       });
 
-      setJoined(true);
-      setIsHost(false);
-      setIAmReady(false);
-      readinessRef.current[user.id] = false;
-
-      // control kanál (spouštění kola pouze hostem)
-      controlChannelRef.current = pusher.subscribe(`private-room-${r}-control`);
-      resultsChannelRef.current = pusher.subscribe(`private-room-${r}-results`);
-
-      // Host určíme jednoduše: abecedně první user_id v místnosti
-      presence.bind("pusher:subscription_succeeded", () => {
-        rebuild();
-        if (presence.members.count > 0) {
-          const allIds = Object.keys(presence.members.members).sort();
-          setIsHost(allIds[0] === user.id);
-        }
+      // Bindování: někdo odejde
+      ch.bind("pusher:member_removed", (m) => {
+        setMembers((prev) => {
+          const next = prev.filter(x => x.id !== m.id);
+          setHostId(next[0]?.id || null);
+          return next;
+        });
       });
 
-      // Příjem příkazu „start round“ → předej do Game.jsx
-      controlChannelRef.current.bind("mp-start", (data) => {
-        currentRoundRef.current = data;
-        setRoundOngoing(true);
+      // Custom event: někdo změnil jméno / ready stav
+      ch.bind("mp:presence-update", (payload) => {
+        setMembers((prev) => {
+          const next = prev.map(p => p.id === payload.id ? { ...p, name: payload.name ?? p.name, ready: typeof payload.ready === "boolean" ? payload.ready : p.ready } : p);
+          next.sort((a,b)=>a.id.localeCompare(b.id));
+          setHostId(next[0]?.id || null);
+          return next;
+        });
+      });
+
+      // Event start kola (přesměruj do Game)
+      ch.bind("mp:round", (data) => {
+        setDebugMsg("Received mp:round");
         window.dispatchEvent(new CustomEvent("cg-mp-round", { detail: data }));
       });
 
-      // Informace o ready stavech
-      controlChannelRef.current.bind("ready-state", ({ id, ready }) => {
-        readinessRef.current[id] = !!ready;
-        const mem = presenceRef.current?.members?.members || {};
-        const ids = Object.keys(mem);
-        const rdy = ids.length > 0 && ids.every((uid) => readinessRef.current[uid]);
-        setAllReady(rdy);
+      // při připojení hned pošli moje jméno (a případně ready)
+      ch.trigger("client-mp-presence-ping", { id: me.id, name, ready });
+      ch.bind("client-mp-presence-ping", (p) => {
+        // všichni aktualizují seznam
+        setMembers((prev) => {
+          const exists = prev.some(x => x.id === p.id);
+          const next = exists ? prev.map(x => x.id === p.id ? { ...x, name: p.name, ready: !!p.ready } : x)
+                              : [...prev, { id: p.id, name: p.name, ready: !!p.ready }];
+          next.sort((a,b)=>a.id.localeCompare(b.id));
+          setHostId(next[0]?.id || null);
+          return next;
+        });
       });
 
-      // Souhrn kola (host → všichni)
-      resultsChannelRef.current.bind("round-summary", (summary) => {
-        window.dispatchEvent(new CustomEvent("cg-round-summary", { detail: summary }));
-        setRoundOngoing(false);
-        // reset readiness po skončení kola
-        Object.keys(readinessRef.current).forEach((k) => (readinessRef.current[k] = false));
-        setIAmReady(false);
-        controlChannelRef.current.trigger?.("client-ready", { id: user.id, ready: false });
-      });
-
-      // Ready zpráva mezi klienty (client events)
-      controlChannelRef.current.bind("client-ready", ({ id, ready }) => {
-        readinessRef.current[id] = !!ready;
-        const mem = presenceRef.current?.members?.members || {};
-        const ids = Object.keys(mem);
-        const rdy = ids.length > 0 && ids.every((uid) => readinessRef.current[uid]);
-        setAllReady(rdy);
-      });
-
-      alert(lang === "cs" ? "Připojeno do místnosti." : "Joined room.");
+      setDebugMsg((m) => m + " Members: " + list.length);
     } catch (e) {
-      console.error("joinRoom failed:", e);
-      alert((lang === "cs" ? "Chyba připojení: " : "Join error: ") + (e?.message || e));
+      console.error("join failed", e);
+      alert("Nepodařilo se připojit k místnosti.\n" + (e?.message || e));
+    } finally {
+      setConnecting(false);
     }
   };
 
-  // odpojit
-  const leaveRoom = () => {
+  const leave = () => {
+    if (channel) {
+      try { pusher.unsubscribe(channel.name); } catch {}
+      setChannel(null);
+      setMembers([]);
+      setHostId(null);
+      setReady(false);
+    }
+  };
+
+  // změna jména: ping do místnosti
+  useEffect(() => {
+    if (!channel) return;
+    try { channel.trigger("client-mp-presence-ping", { id: me.id, name, ready }); } catch {}
+  }, [name]); // eslint-disable-line
+
+  // změna ready: ping do místnosti
+  useEffect(() => {
+    if (!channel) return;
+    try { channel.trigger("client-mp-presence-ping", { id: me.id, name, ready }); } catch {}
+  }, [ready]); // eslint-disable-line
+
+  // Můžu startovat?
+  const minPlayers = 2;
+  const canStart = iAmHost && playerCount >= minPlayers && readyCount === playerCount;
+
+  const startRound = async () => {
+    if (!canStart) return;
+    setStartBusy(true);
     try {
-      if (presenceRef.current) pusher.unsubscribe(presenceRef.current.name);
-      if (controlChannelRef.current) pusher.unsubscribe(controlChannelRef.current.name);
-      if (resultsChannelRef.current) pusher.unsubscribe(resultsChannelRef.current.name);
-    } catch {}
-    presenceRef.current = null;
-    controlChannelRef.current = null;
-    resultsChannelRef.current = null;
-    setPlayers([]);
-    setJoined(false);
-    setIsHost(false);
-    setIAmReady(false);
-  };
+      // parametry kola (hostitel je zvolí → tady fixně)
+      const maxTime = 8000;
+      const maxMult = Number((3.8 + Math.random() * (5.2 - 3.8)).toFixed(2));
+      const tMax = Math.max(1.10, maxMult - 0.05);
+      const target = Number((1.10 + Math.random() * (tMax - 1.10)).toFixed(2));
+      const startAt = Date.now() + 3000; // 3s countdown
+      const seed = startAt;
 
-  // přepnutí „ready“
-  const toggleReady = () => {
-    if (!joined || !controlChannelRef.current) return;
-    const next = !iAmReady;
-    setIAmReady(next);
-    readinessRef.current[user.id] = next;
-    controlChannelRef.current.trigger("client-ready", { id: user.id, ready: next });
-  };
+      const roomName = room;
+      const body = { room: roomName, startAt, maxTime, maxMult, target, seed };
 
-  // Host: start kola → broadcast parametrů všem
-  const startRound = () => {
-    if (!joined || !isHost || !controlChannelRef.current) return;
-    // Všichni musí být ready
-    if (!allReady) {
-      return alert(lang === "cs" ? "Ne všichni jsou READY." : "Not everyone is READY.");
+      const res = await fetch("/api/round-start", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      });
+
+      if (!res.ok) {
+        const tx = await res.text();
+        throw new Error(`round-start failed (${res.status}): ${tx}`);
+      }
+
+      setDebugMsg(`Start sent. Target ${target.toFixed(2)}×`);
+    } catch (e) {
+      console.error("startRound error", e);
+      alert("Start kola selhal: " + (e?.message || e));
+    } finally {
+      setStartBusy(false);
     }
-    // parametry kola
-    const maxTime = 8000;
-    const maxMult = Number((3.8 + Math.random() * (5.2 - 3.8)).toFixed(2));
-    const tMax = Math.max(1.10, maxMult - 0.05);
-    const target = Number((1.10 + Math.random() * (tMax - 1.10)).toFixed(2));
-    const startAt = Date.now() + 3000;
-    const seed = randomSeed();
-    const data = { room, startAt, maxTime, maxMult, target, seed, sig: String(seed) /* demo podpis */ };
-
-    currentRoundRef.current = data;
-    setRoundOngoing(true);
-
-    // Rozeslat klientům
-    controlChannelRef.current.trigger("client-mp-start", data);
   };
-
-  // Klientům nasloucháme i client event (pokrytí všech)
-  useEffect(() => {
-    if (!controlChannelRef.current) return;
-    const ch = controlChannelRef.current;
-    const onStart = (data) => {
-      currentRoundRef.current = data;
-      setRoundOngoing(true);
-      window.dispatchEvent(new CustomEvent("cg-mp-round", { detail: data }));
-    };
-    ch.bind("client-mp-start", onStart);
-    return () => ch.unbind("client-mp-start", onStart);
-  }, [controlChannelRef.current]);
-
-  // Host sbírá „cg-game-result“ od všech a po timeoutu zveřejní souhrn
-  useEffect(() => {
-    if (!joined) return;
-    const resultsMap = new Map(); // userId -> payload
-
-    const onRes = (e) => {
-      const d = e.detail || {};
-      if (!currentRoundRef.current || roundOngoing === false) return;
-      // ulož poslední známý výsledek daného hráče
-      resultsMap.set(d.userId, d);
-    };
-    window.addEventListener("cg-game-result", onRes);
-
-    let finalizeTimer = null;
-
-    const maybeFinalize = () => {
-      if (!isHost || !currentRoundRef.current) return;
-      clearTimeout(finalizeTimer);
-      // Po konci maxTime + buffer 1500ms spočítat pořadí
-      const msLeft = Math.max(0, currentRoundRef.current.startAt + currentRoundRef.current.maxTime + 1500 - Date.now());
-      finalizeTimer = setTimeout(() => {
-        const target = currentRoundRef.current.target;
-        const roundId = currentRoundRef.current.seed;
-        const results = Array.from(resultsMap.values())
-          .map((r) => ({
-            userId: r.userId,
-            name: r.name,
-            value: Number(r.value),
-            diff: Math.abs(Number(r.value) - Number(target)),
-            score: r.score,
-            crashed: !!r.crashed,
-          }))
-          .sort((a, b) => a.diff - b.diff || b.score - a.score);
-
-        const summary = {
-          roundId,
-          target,
-          expectedPlayers: players.length,
-          results,
-        };
-
-        // broadcast na results kanál (client event zaručí doručení i bez server hooku)
-        if (resultsChannelRef.current) {
-          resultsChannelRef.current.trigger("client-round-summary", summary);
-        }
-        // a rovnou i lokálně vyvolej event, aby ho viděl hostitel
-        window.dispatchEvent(new CustomEvent("cg-round-summary", { detail: summary }));
-        setRoundOngoing(false);
-
-        // reset ready
-        Object.keys(readinessRef.current).forEach((k) => (readinessRef.current[k] = false));
-        setIAmReady(false);
-        controlChannelRef.current?.trigger?.("client-ready", { id: user.id, ready: false });
-      }, msLeft);
-    };
-
-    // Reaguj na konec kola (přichází z Game.jsx, když doběhne čas)
-    const onRoundEnd = () => maybeFinalize();
-    window.addEventListener("cg-round-ended", onRoundEnd);
-
-    return () => {
-      window.removeEventListener("cg-game-result", onRes);
-      window.removeEventListener("cg-round-ended", onRoundEnd);
-      clearTimeout(finalizeTimer);
-    };
-  }, [joined, isHost, roundOngoing, players]);
-
-  // client přijímá summary (aby fungovalo i pro nehostitele bez server hooku)
-  useEffect(() => {
-    if (!resultsChannelRef.current) return;
-    const ch = resultsChannelRef.current;
-    const onSummary = (summary) => {
-      window.dispatchEvent(new CustomEvent("cg-round-summary", { detail: summary }));
-      setRoundOngoing(false);
-    };
-    ch.bind("client-round-summary", onSummary);
-    return () => ch.unbind("client-round-summary", onSummary);
-  }, [resultsChannelRef.current]);
 
   return (
     <section className="rounded-2xl bg-white shadow-soft border border-neutral-200 p-6 dark:bg-slate-900 dark:border-slate-800">
-      <h2 className="text-lg font-semibold mb-3">{t(lang, "multiplayer") || "Multiplayer"}</h2>
+      <h2 className="text-lg font-semibold mb-3">{t(lang,"multiplayer") || "Multiplayer"}</h2>
 
-      {!joined ? (
-        <div className="grid gap-3 md:grid-cols-3">
-          <label className="block">
-            <div className="text-xs text-slate-500 mb-1">{lang === "cs" ? "Místnost" : "Room"}</div>
-            <input
-              className="w-full px-3 py-2 rounded-lg border bg-white dark:bg-slate-950 border-neutral-300 dark:border-slate-700"
-              value={room}
-              onChange={(e) => setRoom(e.target.value.toLowerCase())}
-              placeholder="např. alpha-team"
-            />
-          </label>
-          <label className="block">
-            <div className="text-xs text-slate-500 mb-1">{lang === "cs" ? "Tvoje jméno" : "Your name"}</div>
-            <input
-              className="w-full px-3 py-2 rounded-lg border bg-white dark:bg-slate-950 border-neutral-300 dark:border-slate-700"
-              value={name}
-              onChange={(e) => setName(e.target.value)}
-              placeholder="Player"
-            />
-          </label>
-          <div className="flex items-end">
-            <button
-              onClick={joinRoom}
-              className="w-full px-4 py-2 rounded-lg bg-emerald-600 text-white hover:bg-emerald-700"
-            >
-              {lang === "cs" ? "Připojit se" : "Join"}
-            </button>
-          </div>
+      <div className="grid md:grid-cols-3 gap-3">
+        <div className="flex items-center gap-2">
+          <Avatar name={name} />
+          <input
+            className="flex-1 rounded-lg border px-3 py-2 bg-white dark:bg-slate-800"
+            value={name}
+            onChange={(e) => setName(e.target.value)}
+            placeholder="Tvoje jméno"
+          />
         </div>
-      ) : (
+
+        <input
+          className="rounded-lg border px-3 py-2 bg-white dark:bg-slate-800"
+          value={roomInput}
+          onChange={(e) => setRoomInput(e.target.value)}
+          placeholder="Název místnosti (např. alpha-team)"
+        />
+
+        {!channel ? (
+          <button
+            onClick={join}
+            disabled={connecting || !room}
+            className="rounded-lg px-4 py-2 bg-emerald-600 text-white disabled:opacity-50"
+          >
+            {connecting ? "Připojuji…" : "Připojit se"}
+          </button>
+        ) : (
+          <button
+            onClick={leave}
+            className="rounded-lg px-4 py-2 bg-neutral-200 dark:bg-slate-700"
+          >
+            Odejít
+          </button>
+        )}
+      </div>
+
+      {channel && (
         <>
-          <div className="flex flex-wrap items-center gap-3 text-sm">
-            <span className="px-2 py-1 rounded bg-neutral-100 dark:bg-slate-800 border border-neutral-200 dark:border-slate-700">
-              Room: <strong>{room}</strong>
-            </span>
-            <span className="px-2 py-1 rounded bg-neutral-100 dark:bg-slate-800 border border-neutral-200 dark:border-slate-700">
-              You: <strong>{name}</strong>
-            </span>
-            <span className="px-2 py-1 rounded bg-neutral-100 dark:bg-slate-800 border border-neutral-200 dark:border-slate-700">
-              {isHost ? (lang === "cs" ? "Hostitel" : "Host") : (lang === "cs" ? "Hráč" : "Player")}
-            </span>
-            <button
-              onClick={leaveRoom}
-              className="ml-auto px-3 py-1.5 rounded-lg border border-neutral-300 dark:border-slate-700"
-            >
-              {lang === "cs" ? "Odejít" : "Leave"}
-            </button>
+          <div className="mt-4 text-sm text-slate-500">
+            Místnost: <span className="font-mono">{room}</span> · Hostitel:{" "}
+            <span className="font-mono">{hostId || "—"}</span> {iAmHost && <span className="text-emerald-600">(ty)</span>} ·
+            Hráči {playerCount}, Ready {readyCount}/{playerCount}
           </div>
 
-          {/* Seznam hráčů */}
-          <div className="mt-4 grid gap-3 sm:grid-cols-2 md:grid-cols-3">
-            {players.map((p) => (
-              <div key={p.id} className="flex items-center gap-3 p-3 rounded-xl border border-neutral-200 dark:border-slate-800 bg-neutral-50/60 dark:bg-slate-800/50">
-                <Avatar name={p.name} />
-                <div className="flex-1">
-                  <div className="font-medium">{p.name}</div>
-                  <div className="text-xs text-slate-500 break-all">{p.id}</div>
-                </div>
-                <div
-                  className={
-                    "text-xs px-2 py-1 rounded " +
-                    (readinessRef.current[p.id]
-                      ? "bg-emerald-100 text-emerald-700 dark:bg-emerald-900/40 dark:text-emerald-300"
-                      : "bg-neutral-200 text-slate-700 dark:bg-slate-800 dark:text-slate-300")
-                  }
-                >
-                  {readinessRef.current[p.id] ? (lang === "cs" ? "READY" : "READY") : (lang === "cs" ? "ČEKÁ" : "WAITING")}
-                </div>
-              </div>
-            ))}
-          </div>
-
-          {/* Ovládání */}
-          <div className="mt-4 flex flex-wrap gap-3">
-            <button
-              onClick={toggleReady}
-              disabled={roundOngoing}
-              className={"px-4 py-2 rounded-lg border " + (iAmReady
-                ? "bg-emerald-600 text-white border-emerald-700"
-                : "bg-white dark:bg-slate-950 text-slate-900 dark:text-slate-100 border-neutral-300 dark:border-slate-700")}
-            >
-              {iAmReady ? (lang === "cs" ? "Jsem READY" : "I am READY") : (lang === "cs" ? "Připravit se" : "Get ready")}
-            </button>
+          <div className="mt-3 flex items-center gap-3">
+            <label className="inline-flex items-center gap-2">
+              <input type="checkbox" checked={ready} onChange={(e)=>setReady(e.target.checked)} />
+              Jsem připraven/á
+            </label>
 
             <button
               onClick={startRound}
-              disabled={!isHost || !allReady || roundOngoing}
-              className="px-4 py-2 rounded-lg bg-indigo-600 text-white disabled:opacity-50"
-              title={!isHost ? (lang === "cs" ? "Spouští jen hostitel" : "Only host can start") : ""}
+              disabled={!canStart || startBusy}
+              className="rounded-lg px-4 py-2 bg-indigo-600 text-white disabled:opacity-50"
+              title={!canStart ? "Start jen hostitel & všichni musí být připraveni (min 2 hráči)" : ""}
             >
-              {lang === "cs" ? "Start round (host)" : "Start round (host)"}
+              {startBusy ? "Startuji…" : "Start round (host)"}
             </button>
           </div>
+
+          <div className="mt-3 overflow-x-auto">
+            <table className="min-w-full text-sm">
+              <thead>
+                <tr className="text-left text-slate-500">
+                  <th className="py-1 pr-4">ID</th>
+                  <th className="py-1 pr-4">Jméno</th>
+                  <th className="py-1 pr-4">Ready</th>
+                </tr>
+              </thead>
+              <tbody>
+                {members.map(m => (
+                  <tr key={m.id} className="border-t border-neutral-200 dark:border-slate-800">
+                    <td className="py-1 pr-4 font-mono">{m.id}</td>
+                    <td className="py-1 pr-4">{m.name}</td>
+                    <td className="py-1 pr-4">{m.ready ? "✔︎" : "—"}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+
+          {!!debugMsg && <div className="mt-2 text-xs text-slate-500">Debug: {debugMsg}</div>}
         </>
       )}
     </section>
